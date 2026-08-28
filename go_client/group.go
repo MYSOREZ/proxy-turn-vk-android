@@ -292,6 +292,14 @@ type TurnParams struct {
 	Port    string
 	Hashes  []string
 	WrapKey []byte // Password-derived WRAP key (32 bytes), nil = disabled
+
+	// AIObfs switches RunSession from the static per-packet obfuscation
+	// (ObfsConfig/ObfsState, obfsWrapPacket/obfsUnwrapPacket) to aiobfs's
+	// adaptive traffic-masking layer. The server must be running with
+	// -ai-listen and this client must connect to that address — the two
+	// obfuscation layers are not wire-compatible with each other (see
+	// server_ai.go / aiobfs's README for why). Ignored by RunPing.
+	AIObfs bool
 }
 
 // Credentials — учетные данные TURN

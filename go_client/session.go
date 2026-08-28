@@ -16,7 +16,14 @@ import (
 	"github.com/pion/dtls/v3/pkg/crypto/selfsign"
 	"github.com/pion/logging"
 	"github.com/pion/turn/v5"
+
+	"wg-turn-client/aiobfs"
 )
+
+// aiObfsAutonomousInterval is how often RunSession's aiobfs.Shaper
+// re-measures its own path (self-probes) and re-evaluates which disguise
+// to use, when tp.AIObfs is set. See TurnParams.AIObfs and server_ai.go.
+const aiObfsAutonomousInterval = 3 * time.Second
 
 const (
 	workerSendBuf      = 128
@@ -178,11 +185,23 @@ func RunSession(
 	relayWg.Add(2)
 
 	useWrap := len(tp.WrapKey) == wrapKeyLen
+	useAI := useWrap && tp.AIObfs
 
 	// Initialize obfs config per session
 	var obfsCfg *ObfsConfig
 	var obfsWriteState *ObfsState
-	if useWrap {
+	var shaper *aiobfs.Shaper
+	if useAI {
+		var shaperErr error
+		shaper, shaperErr = aiobfs.New(aiobfs.Config{Key: tp.WrapKey})
+		if shaperErr != nil {
+			return false, fmt.Errorf("aiobfs init: %w", shaperErr)
+		}
+		shaper.RunAutonomous(sessCtx, func(wire []byte) error {
+			_, err := relay.WriteTo(wire, peer)
+			return err
+		}, aiObfsAutonomousInterval)
+	} else if useWrap {
 		obfsCfg = NewObfsConfig()
 		obfsWriteState = NewObfsState()
 	}
@@ -207,7 +226,20 @@ func RunSession(
 				return
 			}
 			payload := buf[:n]
-			if useWrap {
+			if useAI {
+				p, isDecoy, wrapErr := shaper.Unwrap(payload)
+				if wrapErr != nil {
+					log.Printf("[СЕССИЯ #%d] AI-OBFS unwrap: %v (n=%d)", sessionID, wrapErr, n)
+					continue
+				}
+				if pong, ok := shaper.PendingPong(); ok {
+					_, _ = relay.WriteTo(pong, peer)
+				}
+				if isDecoy {
+					continue // probe/pong/decoy: never forwarded into the tunnel
+				}
+				payload = p
+			} else if useWrap {
 				if !obfsIsRTPPacket(payload) {
 					log.Printf("[СЕССИЯ #%d] OBFS unwrap: unexpected packet (n=%d)", sessionID, n)
 					continue
@@ -239,7 +271,14 @@ func RunSession(
 				return
 			}
 			out := b[:n]
-			if useWrap {
+			if useAI {
+				wrapped, wrapErr := shaper.Wrap(out)
+				if wrapErr != nil {
+					log.Printf("[СЕССИЯ #%d] AI-OBFS wrap: %v", sessionID, wrapErr)
+					return
+				}
+				out = wrapped
+			} else if useWrap {
 				if obfsCfg != nil && obfsWriteState != nil {
 					wrapped, wrapErr := obfsWrapPacket(tp.WrapKey, out, obfsCfg, obfsWriteState)
 					if wrapErr != nil {

@@ -346,6 +346,21 @@ func (s *wrapKeyStore) Count() int {
 	return len(s.entries)
 }
 
+// Keys returns independent copies of the currently active raw key bytes,
+// for reuse by any bootstrap mechanism that needs to try each active
+// password/key against a new connection's first packet (see aiobfs.TryUnwrap
+// and its use in the -ai-listen listener in server_ai.go). Ordering is
+// unspecified.
+func (s *wrapKeyStore) Keys() [][]byte {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([][]byte, len(s.entries))
+	for i, entry := range s.entries {
+		out[i] = append([]byte(nil), entry.key...)
+	}
+	return out
+}
+
 func (s *wrapKeyStore) Unwrap(raw, dst []byte) ([]byte, int, error) {
 	if !obfsIsRTPPacket(raw) {
 		return nil, 0, errors.New("wrap: non-obfs packet")
@@ -1904,6 +1919,7 @@ func main() {
 	adminID := flag.String("admin", "", "Telegram Admin ID")
 	botToken := flag.String("bot-token", "", "Telegram Bot Token")
 	dnsFlag := flag.String("dns", "8.8.8.8", "DNS серверы для клиентов")
+	aiListen := flag.String("ai-listen", "", "доп. DTLS адрес с адаптивной ИИ-маскировкой трафика (опционально, независим от -listen; см. aiobfs/README или core/README.md в исходном проекте)")
 	flag.Parse()
 	dns = *dnsFlag
 
@@ -1999,6 +2015,9 @@ func main() {
 
 	log.Printf("   DTLS: %s | WG: %s | NAT: %s", *listen, wgEndpoint, natType)
 	log.Printf("   WRAP: password HKDF + RTP AEAD | keys: %d", serverWrapKeys.Count())
+
+	startAIListener(ctx, *aiListen, wgEndpoint, wgDev, keys, cert)
+
 	log.Println("[SERVER] Готов")
 
 	var wg sync.WaitGroup

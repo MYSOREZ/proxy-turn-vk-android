@@ -125,6 +125,7 @@ func main() {
 	vkAuthMode := flag.String("vk-auth", "anonymous", "режим VK авторизации (account/anonymous)")
 	vkAnonPath := flag.String("vk-anon-path", "vkcalls", "анонимный путь VK TURN (vkcalls/legacy)")
 	vkCredsFile := flag.String("vk-creds-file", "", "файл с TURN кредами от аккаунта VK")
+	aiObfs := flag.Bool("ai-obfs", false, "адаптивная ИИ-маскировка трафика вместо статичной (нужен сервер, запущенный с -ai-listen; см. aiobfs/README)")
 
 	flag.Parse()
 	activeCaptchaMode := setCaptchaMode(*captchaMode)
@@ -189,6 +190,7 @@ func main() {
 		Port:    *port,
 		Hashes:  hashes,
 		WrapKey: wrapKey,
+		AIObfs:  *aiObfs,
 	}
 
 	if *pingOnly {
