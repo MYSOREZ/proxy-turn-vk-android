@@ -38,6 +38,8 @@ readonly IPT_COMMENT="WDTT_HY2_MANAGED"
 # туннеля, наружный порт остаётся один — DTLS.
 readonly HY2_PORT="${WDTT_HY2_PORT:-56143}"
 readonly HY2_BIN="/usr/local/bin/hysteria-hy2"
+# Обёртка внешней авторизации Hysteria2 (auth.type: command).
+readonly HY2_AUTH_BIN="/usr/local/bin/wdtt-hy2-auth"
 readonly HY2_DIR="/etc/hysteria-hy2"
 readonly HY2_SNI="${WDTT_HY2_SNI:-bing.com}"
 readonly IPT_MIRROR_COMMENT="WDTT_HY2_MIRRORED"
@@ -673,6 +675,7 @@ do_uninstall() {
     rm -f /etc/systemd/system/hysteria-hy2.service 2>/dev/null || true
     rm -rf "$HY2_DIR" 2>/dev/null || true
     rm -f "$HY2_BIN" 2>/dev/null || true
+    rm -f "$HY2_AUTH_BIN" 2>/dev/null || true
 
     log_step "Удаление WDTT..."
 
@@ -755,11 +758,21 @@ install_hysteria2() {
         chmod 600 "$HY2_DIR/server.key"
     fi
 
-    # Пароль Hysteria2 = пароль подключения qWDTT: приложение передаёт его
-    # в оба места само, отдельного поля в интерфейсе не нужно.
-    local hy2_pass
-    hy2_pass="$(cat "${WDTT_CONFIG_DIR}/main.password" 2>/dev/null || true)"
-    [ -n "$hy2_pass" ] || die "Hysteria2: пустой пароль (${WDTT_CONFIG_DIR}/main.password)"
+    # Пароль Hysteria2 не фиксируем: действующих паролей у qWDTT может быть
+    # несколько (владелец из вкладки «Серверы» + пароли устройств из
+    # админ-панели/бота), и туннель принимает любой из них. Один пароль в
+    # конфиге означал бы, что остальные проходят DTLS, но получают от
+    # Hysteria2 редирект маскарада (HTTP 301) — со стороны приложения это
+    # выглядит как «authentication error» уже после успешного подключения.
+    # Поэтому пароль проверяет сам сервер qWDTT (см. server/authcheck.go).
+    [ -s "${WDTT_CONFIG_DIR}/main.password" ] || die "Hysteria2: пустой пароль (${WDTT_CONFIG_DIR}/main.password)"
+
+    cat > "$HY2_AUTH_BIN" <<HY2AUTH
+#!/bin/sh
+# hysteria зовёт: <addr> <пароль> <tx>; код 0 — пустить, stdout — идентификатор
+exec /usr/local/bin/wdtt-hy2-server -config-dir "${WDTT_CONFIG_DIR}" -password-file "${WDTT_CONFIG_DIR}/main.password" -auth-check "\$2"
+HY2AUTH
+    chmod 755 "$HY2_AUTH_BIN"
 
     cat > "$HY2_DIR/config.yaml" <<HY2CFG
 listen: 127.0.0.1:${HY2_PORT}
@@ -769,8 +782,8 @@ tls:
   key: ${HY2_DIR}/server.key
 
 auth:
-  type: password
-  password: ${hy2_pass}
+  type: command
+  command: ${HY2_AUTH_BIN}
 
 # Полосу намеренно не фиксируем — тогда работает BBR. Brutal включается
 # уже на клиенте флагами -hy2-up/-hy2-down, так можно сравнить оба, не
@@ -802,7 +815,10 @@ WantedBy=multi-user.target
 HY2SVC
 
     systemctl daemon-reload
-    systemctl enable --now hysteria-hy2.service >/dev/null 2>&1 || true
+    systemctl enable hysteria-hy2.service >/dev/null 2>&1 || true
+    # Именно restart, а не `enable --now`: на повторной установке сервис уже
+    # запущен, и `--now` не перечитал бы новый config.yaml.
+    systemctl restart hysteria-hy2.service >/dev/null 2>&1 || true
     sleep 1
     if systemctl is-active --quiet hysteria-hy2.service; then
         log_info "Hysteria2 работает на 127.0.0.1:${HY2_PORT}"

@@ -1530,7 +1530,7 @@ private suspend fun performUninstall(
         ssh.exec(rootCommand("[ -f /tmp/deploy-hy2.sh ] && env WDTT_DTLS_PORT=$dtlsPort WDTT_WG_PORT=$wgPort WDTT_SSH_PORT=$port bash /tmp/deploy-hy2.sh uninstall 2>/dev/null || true"), timeout = 30000L)
 
         onProgress(0.45f, "Удаление бинарника...")
-        ssh.exec(rootCommand("systemctl stop hysteria-hy2 2>/dev/null || true; systemctl disable hysteria-hy2 2>/dev/null || true; pkill -x wdtt-hy2-server 2>/dev/null || true; rm -f /usr/local/bin/wdtt-hy2-server /usr/local/bin/hysteria-hy2; rm -rf /etc/hysteria-hy2"), timeout = 10000L)
+        ssh.exec(rootCommand("systemctl stop hysteria-hy2 2>/dev/null || true; systemctl disable hysteria-hy2 2>/dev/null || true; pkill -x wdtt-hy2-server 2>/dev/null || true; rm -f /usr/local/bin/wdtt-hy2-server /usr/local/bin/hysteria-hy2 /usr/local/bin/wdtt-hy2-auth; rm -rf /etc/hysteria-hy2"), timeout = 10000L)
 
         onProgress(0.60f, "Очистка firewall...")
         ssh.exec(

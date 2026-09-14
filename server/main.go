@@ -46,6 +46,8 @@ func main() {
 	// используется — так правка не задевает управление пирами и БД.
 	forwardTo := flag.String("forward", "", "локальный UDP-адрес для расшифрованного трафика вместо встроенного WireGuard (напр. 127.0.0.1:56443 для Hysteria2)")
 	wgIface := flag.String("wg-iface", wgIfaceName, "имя TUN-интерфейса встроенного WireGuard (менять при нескольких экземплярах на одном сервере)")
+	// Разовая проверка пароля для внешней авторизации Hysteria2 — см. authcheck.go.
+	authCheck := flag.String("auth-check", "", "проверить пароль по базе и выйти (0 — принят); для auth.type=command в Hysteria2")
 	flag.Parse()
 	if s := strings.TrimSpace(*wgIface); s != "" {
 		wgIfaceName = s
@@ -58,6 +60,11 @@ func main() {
 	botTokenValue, err := loadOptionalSecret(*botToken, *botTokenFile)
 	if err != nil {
 		log.Fatalf("[CONFIG] Telegram Bot Token: %v", err)
+	}
+
+	// Режим проверки пароля: ничего не поднимаем и ничего не пишем в базу.
+	if *authCheck != "" {
+		os.Exit(runAuthCheck(*configDir, mainPasswordValue, *authCheck))
 	}
 
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
