@@ -101,9 +101,16 @@ class TunnelService : Service() {
                             noDtlsEnabled -> serverDirectPort
                             else -> serverDtlsPort
                         }
+                        // Порт задаём ВСЕГДА, а не только когда его нет в
+                        // строке (раньше здесь был ensurePort). Это сборка-клон:
+                        // её сервер слушает свои порты (56100 DTLS / 56102
+                        // direct), и порт, оставшийся в адресе от оригинального
+                        // qWDTT или набранный руками, уводил трафик не туда —
+                        // например на 56102 при включённом DTLS, где сервер
+                        // ждёт как раз обратного, и рукопожатие молча не
+                        // сходилось.
                         val peerWithPort = if (basePeer.isBlank()) basePeer
-                            else if (isRawTun || noDtlsEnabled) PeerAddress.withPort(basePeer, effectiveServerPort)
-                            else PeerAddress.ensurePort(basePeer, effectiveServerPort)
+                            else PeerAddress.withPort(basePeer, effectiveServerPort)
                         val vkAnonPath = SettingsStore.normalizeVkAnonPath(
                             intent.getStringExtra("vk_anon_path")?.takeIf { it.isNotEmpty() }
                                 ?: store.vkAnonPath.first()
@@ -209,9 +216,9 @@ class TunnelService : Service() {
                     noDtlsEnabled -> serverDirectPort
                     else -> serverDtlsPort
                 }
+                // См. комментарий выше: порт всегда наш, а не из адреса.
                 val peerWithPort = if (basePeer.isBlank()) basePeer
-                    else if (isRawTunRestore || noDtlsEnabled) PeerAddress.withPort(basePeer, effectiveServerPort)
-                    else PeerAddress.ensurePort(basePeer, effectiveServerPort)
+                    else PeerAddress.withPort(basePeer, effectiveServerPort)
                 val params = TunnelParams(
                     peer = peerWithPort,
                     vkHashes = store.vkHashes.first(),

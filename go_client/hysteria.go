@@ -6,6 +6,8 @@ import (
 	"io"
 	"log"
 	"net"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	hyclient "github.com/apernet/hysteria/core/v2/client"
@@ -43,6 +45,85 @@ func (remoteResolver) Resolve(ctx context.Context, name string) (context.Context
 	return context.WithValue(ctx, fqdnKey{}, name), net.IPv4zero, nil
 }
 
+// ── Телеметрия туннеля ───────────────────────────────────────────────────────
+//
+// QUIC про TURN ничего не знает: он просто шлёт датаграммы в локальный порт.
+// Если туннель не встал, клиент видит только "timeout: no recent network
+// activity" — по нему нельзя понять, ушло ли хоть что-то и вернулось ли.
+// Поэтому даём Hysteria2 обычный UDP-сокет, но со счётчиками, и раз в
+// несколько секунд печатаем их, пока ответа нет.
+
+type countingPacketConn struct {
+	net.PacketConn
+	sentPkts  atomic.Int64
+	sentBytes atomic.Int64
+	maxSent   atomic.Int64
+	recvPkts  atomic.Int64
+	recvBytes atomic.Int64
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+func (c *countingPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
+	n := int64(len(p))
+	c.sentPkts.Add(1)
+	c.sentBytes.Add(n)
+	for {
+		cur := c.maxSent.Load()
+		if n <= cur || c.maxSent.CompareAndSwap(cur, n) {
+			break
+		}
+	}
+	return c.PacketConn.WriteTo(p, addr)
+}
+
+func (c *countingPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
+	n, addr, err := c.PacketConn.ReadFrom(p)
+	if err == nil {
+		c.recvPkts.Add(1)
+		c.recvBytes.Add(int64(n))
+	}
+	return n, addr, err
+}
+
+func (c *countingPacketConn) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
+	return c.PacketConn.Close()
+}
+
+// watch печатает счётчики, пока из туннеля не пришёл первый пакет.
+func (c *countingPacketConn) watch(serverAddr string) {
+	t := time.NewTicker(4 * time.Second)
+	defer t.Stop()
+	for i := 0; i < 5; i++ {
+		select {
+		case <-c.closed:
+			return
+		case <-t.C:
+		}
+		recv := c.recvPkts.Load()
+		log.Printf("[HY2] Туннель %s: отправлено %d пакетов (%d Б, макс %d Б), получено %d пакетов (%d Б)",
+			serverAddr, c.sentPkts.Load(), c.sentBytes.Load(), c.maxSent.Load(), recv, c.recvBytes.Load())
+		if recv > 0 {
+			return
+		}
+		log.Printf("[HY2] Из туннеля не вернулось ни одного пакета. Проверьте, что порт сервера соответствует режиму: DTLS — 56100, «без DTLS» — 56102")
+	}
+}
+
+// tunnelConnFactory — фабрика сокетов для Hysteria2 со счётчиками выше.
+type tunnelConnFactory struct{}
+
+func (tunnelConnFactory) New(addr net.Addr) (net.PacketConn, error) {
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{})
+	if err != nil {
+		return nil, err
+	}
+	c := &countingPacketConn{PacketConn: pc, closed: make(chan struct{})}
+	go c.watch(addr.String())
+	return c, nil
+}
+
 // HysteriaParams — всё, что нужно для подключения к серверной части.
 type HysteriaParams struct {
 	ServerAddr string // куда слать QUIC; обычно 127.0.0.1:<listen>, т.е. вход в TURN-туннель
@@ -63,8 +144,9 @@ func newHysteriaClient(p HysteriaParams) (hyclient.Client, error) {
 	}
 
 	cfg := &hyclient.Config{
-		ServerAddr: udpAddr,
-		Auth:       p.Auth,
+		ConnFactory: tunnelConnFactory{},
+		ServerAddr:  udpAddr,
+		Auth:        p.Auth,
 		TLSConfig: hyclient.TLSConfig{
 			ServerName:         p.SNI,
 			InsecureSkipVerify: p.Insecure,
