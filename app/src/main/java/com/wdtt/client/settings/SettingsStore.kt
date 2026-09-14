@@ -322,7 +322,21 @@ class SettingsStore(context: Context) {
     val protocol: Flow<String> = dataStore.data.map { it[PROTOCOL] ?: "udp" }
     val listenPort: Flow<Int> = dataStore.data.map { it[LISTEN_PORT] ?: 9000 }
     val manualPortsEnabled: Flow<Boolean> = dataStore.data.map { it[MANUAL_PORTS_ENABLED] ?: false }
-    val serverDtlsPort: Flow<Int> = dataStore.data.map { it[SERVER_DTLS_PORT] ?: 56100 }
+    /**
+     * DTLS-порт сервера. Читается со страховкой: если сохранённое значение
+     * совпало с портом direct-режима, оно заведомо неверно — это разные
+     * слушатели сервера, на одном порту они быть не могут. Так получалось,
+     * когда порт из адреса сервера «повышался» до ручного DTLS-порта (см.
+     * SettingsTab): в настройках оказывался 56102, DTLS-рукопожатие уходило
+     * в порт, где сервер ждёт трафик БЕЗ DTLS, и туннель молча не вставал.
+     * Чиним на чтении, а не миграцией: действует сразу везде и ничего не
+     * затирает в хранилище.
+     */
+    val serverDtlsPort: Flow<Int> = dataStore.data.map { prefs ->
+        val direct = prefs[SERVER_DIRECT_PORT] ?: 56102
+        val stored = prefs[SERVER_DTLS_PORT] ?: 56100
+        if (stored == direct) 56100 else stored
+    }
     val serverWgPort: Flow<Int> = dataStore.data.map { it[SERVER_WG_PORT] ?: 56101 }
     /** Требует сервер с флагом -listen-direct и совместимую версию сервера. */
     val noDtlsEnabled: Flow<Boolean> = dataStore.data.map { it[NO_DTLS_ENABLED] ?: false }

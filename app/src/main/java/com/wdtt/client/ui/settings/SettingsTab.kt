@@ -312,7 +312,11 @@ fun SettingsTabContent(
         val wbvCaptchaMethod = settingsStore.captchaWbvSolveMethod.first()
         val vkAuthMode = settingsStore.vkAuthMode.first()
         
-        val embeddedPort = PeerAddress.port(peer)
+        // Порт из адреса сервера принимаем, только если он не совпадает с
+        // портом direct-режима: иначе он «повышался» до ручного DTLS-порта и
+        // ломал подключение (DTLS в порт, где сервер ждёт трафик без DTLS).
+        val directPortNow = settingsStore.serverDirectPort.first()
+        val embeddedPort = PeerAddress.port(peer)?.takeIf { it != directPortNow }
         peerInput = PeerAddress.host(peer)
         val initialHashesList = hashes.split(Regex("[,\\s\\n]+"))
             .filter { it.isNotBlank() && it.length >= 16 }
