@@ -592,6 +592,18 @@ start_wdtt() {
         return 0
     fi
 
+    # Сверяем, что на сервер приехал бинарник ИМЕННО этой сборки: без флага
+    # -forward он не умеет отдавать трафик в Hysteria2 и будет падать на
+    # старте, а причина из systemd-лога неочевидна.
+    echo "   Бинарник: $(sha256sum /usr/local/bin/wdtt-hy2-server 2>/dev/null | cut -c1-12), $(stat -c%s /usr/local/bin/wdtt-hy2-server 2>/dev/null) байт"
+    if ! /usr/local/bin/wdtt-hy2-server -h 2>&1 | grep -q -- "-forward"; then
+        echo "❌ Установленный бинарник НЕ поддерживает -forward."
+        echo "   Значит, на телефоне стоит старая сборка приложения."
+        echo "   Обновите APK (qWDTT-HY2) и повторите установку."
+        echo "WDTT_DEPLOY_SERVICE_FAILED"
+        return 0
+    fi
+
     systemctl restart wdtt-hy2
 
     sleep 2
@@ -612,8 +624,16 @@ start_wdtt() {
         echo "   SSH:  порт ${SSH_PORT}"
     else
         echo "⚠️ Сервис wdtt не запустился. Статус: $status"
-        echo "   Последние логи:"
-        journalctl -u wdtt-hy2 -n 7 --no-pager 2>/dev/null | sed 's/^/   >> /'
+        echo "   Последние логи сервиса:"
+        journalctl -u wdtt-hy2 -n 25 --no-pager -o cat 2>/dev/null | sed 's/^/   >> /'
+        echo "   Прямой запуск (перехват ошибки):"
+        timeout 6 /usr/local/bin/wdtt-hy2-server \
+            -listen "0.0.0.0:${DTLS_PORT}" -forward "127.0.0.1:${HY2_PORT}" \
+            -wg-iface "${WDTT_IFACE}" -wg-port "${WG_PORT}" \
+            -config-dir "${WDTT_CONFIG_DIR}" -password-file "${WDTT_CONFIG_DIR}/main.password" \
+            -dns "${DNS_SERVERS}" 2>&1 | tail -15 | sed 's/^/   >> /'
+        echo "   Состояние Hysteria2: $(systemctl is-active hysteria-hy2 2>/dev/null || echo unknown)"
+        journalctl -u hysteria-hy2 -n 10 --no-pager -o cat 2>/dev/null | sed 's/^/   >> HY2: /'
         echo "WDTT_DEPLOY_SERVICE_FAILED"
     fi
 

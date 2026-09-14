@@ -419,6 +419,10 @@ private fun exportFullLog(context: android.content.Context, uiLogText: String) {
                 appendLine("=== UI-лог qWDTT ===")
                 appendLine(uiLogText)
                 appendLine()
+                appendLine("=== Протокол установки (errors.log) ===")
+                val deployTranscript = com.wdtt.client.DeployManager.readTranscript()
+                appendLine(if (deployTranscript.isBlank()) "(пусто)" else deployTranscript)
+                appendLine()
                 appendLine("=== logcat ===")
                 append(logcatOutput)
             }

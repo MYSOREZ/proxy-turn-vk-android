@@ -186,20 +186,41 @@ object TunnelManager {
         unreadErrorCount.value = 0
     }
 
-    // Добавляем лог с Деплоя
-    fun addDeployErrorLog(message: String) {
-        val hash = message.hashCode().toString()
-        updateLog("deploy_err_$hash", "[ДЕПЛОЙ] $message", 99, true)
+    // Добавляем лог с Деплоя.
+    //
+    // Все строки деплоя нумеруются монотонно: ключ уникален (ничего не
+    // схлопывается в "(xN)"), а priority = DEPLOY_PRIORITY_BASE + seq держит
+    // их в том же порядке, в каком они пришли с сервера. Раньше ключ считался
+    // от хеша текста: повторы затирали друг друга НА МЕСТЕ, а разные строки
+    // сортировались по хешу — из-за этого многострочный вывод (journalctl,
+    // диагностика сервиса) в логе выглядел обрезанным и перемешанным.
+    private val deploySeq = java.util.concurrent.atomic.AtomicInteger(0)
+
+    private fun addDeployEntry(message: String, isError: Boolean) {
+        val seq = deploySeq.incrementAndGet()
+        val key = "deploy_" + seq.toString().padStart(6, '0')
+        updateLog(key, "[ДЕПЛОЙ] $message", DEPLOY_PRIORITY_BASE + seq, isError)
     }
 
-    fun addDeploySuccessLog(message: String) {
-        val hash = message.hashCode().toString() + System.currentTimeMillis()
-        updateLog("deploy_ok_$hash", "[ДЕПЛОЙ] $message", 2, false)
-    }
+    fun addDeployErrorLog(message: String) = addDeployEntry(message, true)
 
-    fun addDeployLog(message: String) {
-        val key = "deploy_info_${message.take(48).hashCode()}"
-        updateLog(key, "[ДЕПЛОЙ] $message", 50, false)
+    fun addDeploySuccessLog(message: String) = addDeployEntry(message, false)
+
+    fun addDeployLog(message: String) = addDeployEntry(message, false)
+
+    /**
+     * Строка, пришедшая по SSH с сервера, как есть. Кладём в лог ВЕСЬ вывод,
+     * а не только строки с признаком ошибки: причина падения сервиса обычно
+     * в соседних строках (journalctl, вывод бинарника), и без них в логе
+     * оставалось только "status=1/FAILURE" без объяснения.
+     */
+    fun addDeployRemoteLog(message: String, isError: Boolean = false) =
+        addDeployEntry(message, isError)
+
+    /** Новый сеанс установки — нумерация с нуля, старые строки не мешают. */
+    fun resetDeployLog() {
+        deploySeq.set(0)
+        logs.update { list -> list.filterNot { it.key.startsWith("deploy_") } }
     }
 
     fun addVkAuthLog(message: String, isError: Boolean = false, verbose: Boolean = false) {
@@ -251,6 +272,14 @@ object TunnelManager {
         )
     }
 
+    // Приоритет строк деплоя: заведомо ниже всех прочих категорий (см.
+    // комментарий к сортировке), чтобы они шли одним непрерывным блоком.
+    private const val DEPLOY_PRIORITY_BASE = 1000
+
+    // Деплой легко даёт несколько сотен строк (apt, systemd, journalctl),
+    // поэтому лимит заметно выше прежних 100.
+    private const val LOG_LIMIT = 600
+
     private fun updateLog(key: String, message: String, priority: Int, isError: Boolean = false) {
         if (isError) {
             val list = logs.value
@@ -275,8 +304,23 @@ object TunnelManager {
             // Приоритеты: Основной=1, Капча=5, Готов=10, Статы=100, Ошибки=200
             val sorted = current.sortedWith(compareBy({ it.priority }, { if (it.isError) 1 else 0 }, { it.key }))
 
-            // Лимит 100 записей
-            if (sorted.size > 100) sorted.take(100) else sorted
+            // Лимит записей. При переполнении выбрасываем САМЫЕ СТАРЫЕ строки
+            // деплоя, а не хвост по приоритету: у деплоя приоритет самый
+            // высокий, и старое `take(LOG_LIMIT)` срезало ровно то, ради чего
+            // лог и открывают — диагностику установки в самом конце.
+            if (sorted.size <= LOG_LIMIT) {
+                sorted
+            } else {
+                val excess = sorted.size - LOG_LIMIT
+                val dropIdx = sorted.withIndex()
+                    .filter { it.value.key.startsWith("deploy_") }
+                    .map { it.index }
+                    .take(excess)
+                    .toSet()
+                val trimmed =
+                    if (dropIdx.isEmpty()) sorted else sorted.filterIndexed { i, _ -> i !in dropIdx }
+                if (trimmed.size > LOG_LIMIT) trimmed.take(LOG_LIMIT) else trimmed
+            }
         }
     }
 

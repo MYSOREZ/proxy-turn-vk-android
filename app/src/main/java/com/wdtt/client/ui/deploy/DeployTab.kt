@@ -1196,10 +1196,16 @@ private class SSHClient(private val session: Session, private val pass: String) 
                         } else if (!line.contains("WDTT_PROGRESS")) {
                             val clean = line.replace(Regex("\u001B\\[[;\\d]*m"), "")
                             result.appendLine(clean)
-                            if (clean.contains("[✗]") || clean.contains("FAIL") ||
-                                (clean.contains("error", true) && !clean.contains("2>/dev/null"))) {
-                                DeployManager.writeError("REMOTE: $clean")
-                                TunnelManager.addDeployErrorLog("REMOTE: $clean")
+                            // Весь вывод сервера идёт и в UI-лог, и в errors.log.
+                            // Раньше сюда попадали только строки с признаком
+                            // ошибки, поэтому дамп journalctl и вывод бинарника
+                            // терялись, а в логе оставалось голое
+                            // "status=1/FAILURE" без причины.
+                            if (clean.isNotBlank()) {
+                                val isErr = clean.contains("[✗]") || clean.contains("FAIL") ||
+                                    (clean.contains("error", true) && !clean.contains("2>/dev/null"))
+                                TunnelManager.addDeployRemoteLog("REMOTE: $clean", isErr)
+                                DeployManager.writeFileOnly("REMOTE: $clean")
                             }
                         }
                     }
@@ -1210,8 +1216,8 @@ private class SSHClient(private val session: Session, private val pass: String) 
                         val clean = line.replace(Regex("\u001B\\[[;\\d]*m"), "")
                         result.appendLine(clean)
                         if (clean.isNotBlank() && !clean.startsWith("Warning:")) {
-                            DeployManager.writeError("STDERR: $clean")
-                            TunnelManager.addDeployErrorLog("STDERR: $clean")
+                            TunnelManager.addDeployRemoteLog("STDERR: $clean", true)
+                            DeployManager.writeFileOnly("STDERR: $clean")
                         }
                     }
                 }

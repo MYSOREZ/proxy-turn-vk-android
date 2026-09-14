@@ -33,6 +33,29 @@ object DeployManager {
     @Synchronized
     fun writeError(msg: String) {
         TunnelManager.addDeployErrorLog(msg)
+        appendToFile(msg)
+    }
+
+    /**
+     * Только в errors.log, без дублирования во вкладку «Логи».
+     * Для строк, которые вызывающий уже положил в UI-лог сам
+     * (весь поток вывода SSH) — иначе каждая строка удваивалась.
+     */
+    @Synchronized
+    fun writeFileOnly(msg: String) {
+        appendToFile(msg)
+    }
+
+    /** Полный протокол установки из errors.log — для кнопки «Поделиться». */
+    @Synchronized
+    fun readTranscript(maxChars: Int = 200_000): String {
+        val file = errorsFile ?: return ""
+        return try {
+            if (!file.exists()) "" else file.readText().takeLast(maxChars)
+        } catch (_: Exception) { "" }
+    }
+
+    private fun appendToFile(msg: String) {
         val file = errorsFile ?: return
         try {
             val timestamp = dateFormat.format(Date())
@@ -56,7 +79,12 @@ object DeployManager {
         deployStartTime = System.currentTimeMillis()
         deployProgress.value = 0f
         currentStep.value = "Инициализация..."
-        TunnelManager.addDeployLog("Старт установки…")
+        // Новый сеанс — чистим строки прошлой установки в UI-логе, иначе
+        // старая диагностика смешивается с новой (в errors.log всё остаётся).
+        TunnelManager.resetDeployLog()
+        TunnelManager.addDeployLog(
+            "Старт установки… (приложение ${BuildConfig.VERSION_NAME}, build ${BuildConfig.VERSION_CODE})"
+        )
     }
 
     fun stopDeploy(result: String = "") {
