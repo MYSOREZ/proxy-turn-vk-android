@@ -32,7 +32,8 @@ Hysteria2 восстанавливает потери сам и имеет со�
 | `app/.../TunnelManager.kt` | третий режим (кнопка **HY2**) шлёт ядру `-mode hysteria` |
 | `app/build.gradle.kts` | `applicationId = net.qwdtt.hy2`, versionName `1.4.4-hy2` |
 | `AndroidManifest.xml`, `shortcuts.xml`, `TunnelWidgetProvider.kt` | свой label и свой broadcast-action, чтобы не пересекаться с оригиналом |
-| `app/src/main/assets/deploy-hy2.sh` | новый: параллельная установка на сервер |
+| `app/src/main/assets/deploy.sh` | развёрнут на свои порты/пути/юниты + ставит Hysteria2; контракт с приложением сохранён |
+| `app/.../DeployTab.kt` | установка/удаление по SSH переведены на идентификаторы клона (иначе сносили оригинал) |
 
 Путь данных на сервере изначально был обычным UDP-релеем
 (`net.Dial("udp", wgEndpoint)`), протокол внутри он не разбирал — поэтому
