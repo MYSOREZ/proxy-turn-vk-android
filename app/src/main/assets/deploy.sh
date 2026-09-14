@@ -152,15 +152,15 @@ install_prerequisites() {
 
     case "$PKG_MGR" in
         apt)
-            pkg_install ca-certificates openssl iproute2 iptables nftables procps psmisc || \
+            pkg_install ca-certificates curl openssl iproute2 iptables nftables procps psmisc || \
                 log_warn "Часть apt-пакетов не установилась, продолжаю с доступными утилитами"
             ;;
         dnf|yum)
-            pkg_install ca-certificates openssl iproute iptables nftables procps-ng psmisc || \
+            pkg_install ca-certificates curl openssl iproute iptables nftables procps-ng psmisc || \
                 log_warn "Часть rpm-пакетов не установилась, продолжаю с доступными утилитами"
             ;;
         pacman)
-            pkg_install ca-certificates openssl iproute2 iptables nftables procps-ng psmisc || \
+            pkg_install ca-certificates curl openssl iproute2 iptables nftables procps-ng psmisc || \
                 log_warn "Часть pacman-пакетов не установилась, продолжаю с доступными утилитами"
             ;;
     esac
@@ -556,7 +556,9 @@ setup_wdtt_service() {
 
     cat > /etc/systemd/system/wdtt-hy2.service << WDTTSVC
 [Unit]
-Description=WDTT VPN Server
+Description=WDTT VPN Server (сборка HY2)
+Wants=hysteria-hy2.service
+After=hysteria-hy2.service
 After=network.target network-online.target
 Wants=network-online.target
 
@@ -686,9 +688,15 @@ install_hysteria2() {
             *) die "Hysteria2: неподдерживаемая архитектура $(uname -m)" ;;
         esac
         log_info "Скачиваю Hysteria2 (${arch})..."
-        curl -fsSL -o "$HY2_BIN" \
-            "https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-${arch}" \
-            || die "Hysteria2 не скачался"
+        local hy2_url="https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-${arch}"
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL -o "$HY2_BIN" "$hy2_url" || die "Hysteria2 не скачался (curl): $hy2_url"
+        elif command -v wget >/dev/null 2>&1; then
+            wget -qO "$HY2_BIN" "$hy2_url" || die "Hysteria2 не скачался (wget): $hy2_url"
+        else
+            die "нет ни curl, ни wget — нечем скачать Hysteria2"
+        fi
+        [ -s "$HY2_BIN" ] || die "Hysteria2: скачанный файл пуст"
         chmod 755 "$HY2_BIN"
     else
         log_info "Hysteria2 уже установлен"

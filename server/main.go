@@ -105,19 +105,31 @@ func main() {
 
 	enableBBR()
 
-	wgDev, err = startUserspaceWG(keys, *wgPort)
-	if err != nil {
-		log.Fatalf("[WG] Запуск: %v", err)
+	// В режиме -forward расшифрованный трафик уходит во внешний демон
+	// (напр. Hysteria2), а встроенный WireGuard не участвует вообще.
+	// Поднимать его в этом случае не только бессмысленно, но и вредно:
+	// адрес wgServerCIDR захардкожен, поэтому второй экземпляр сервера на
+	// той же машине не смог бы его назначить ("ip addr add ... File exists"
+	// / RTNETLINK) и падал бы на старте, а `ip link del` в cleanup снёс бы
+	// интерфейс соседнего экземпляра.
+	forwardMode := strings.TrimSpace(*forwardTo) != ""
+	if forwardMode {
+		log.Printf("[WG] Встроенный WireGuard не запускается: активен режим -forward")
+	} else {
+		wgDev, err = startUserspaceWG(keys, *wgPort)
+		if err != nil {
+			log.Fatalf("[WG] Запуск: %v", err)
+		}
+		globalWgDev = wgDev
+		if removed := cleanupExpiredPasswords(wgDev); removed > 0 {
+			log.Printf("[DB] Удалено истёкших паролей при старте: %d", removed)
+		}
+		syncPersistedPeersToWG(wgDev)
+		defer func() {
+			wgDev.Close()
+			runCmdSilent("ip", "link", "del", wgIfaceName)
+		}()
 	}
-	globalWgDev = wgDev
-	if removed := cleanupExpiredPasswords(wgDev); removed > 0 {
-		log.Printf("[DB] Удалено истёкших паролей при старте: %d", removed)
-	}
-	syncPersistedPeersToWG(wgDev)
-	defer func() {
-		wgDev.Close()
-		runCmdSilent("ip", "link", "del", wgIfaceName)
-	}()
 
 	go statsLoop(ctx, *configDir)
 	go expiredPasswordJanitor(ctx, wgDev)
@@ -196,7 +208,7 @@ func main() {
 	context.AfterFunc(ctx, func() { listener.Close() })
 
 	wgEndpoint := fmt.Sprintf("127.0.0.1:%d", *wgPort)
-	if strings.TrimSpace(*forwardTo) != "" {
+	if forwardMode {
 		wgEndpoint = strings.TrimSpace(*forwardTo)
 		log.Printf("   FORWARD: расшифрованный трафик уходит на %s (встроенный WireGuard не используется)", wgEndpoint)
 	}

@@ -889,14 +889,14 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
 							dev, devExists := db.Devices[entry.DeviceID]
 							if devExists {
 								pubHex, _ := b64ToHex(dev.PubKey)
-								wgDev.IpcSet(fmt.Sprintf("public_key=%s\nremove=true\n", pubHex))
+								wgIpcSet(wgDev, fmt.Sprintf("public_key=%s\nremove=true\n", pubHex))
 							}
 						}
 						for _, id := range entry.DeviceIDs {
 							dev, devExists := db.Devices[id]
 							if devExists {
 								pubHex, _ := b64ToHex(dev.PubKey)
-								wgDev.IpcSet(fmt.Sprintf("public_key=%s\nremove=true\n", pubHex))
+								wgIpcSet(wgDev, fmt.Sprintf("public_key=%s\nremove=true\n", pubHex))
 							}
 						}
 						saveDB()
@@ -969,7 +969,7 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
 							dev, devExists := db.Devices[entry.DeviceID]
 							if devExists {
 								pubHex, _ := b64ToHex(dev.PubKey)
-								wgDev.IpcSet(fmt.Sprintf("public_key=%s\nremove=true\n", pubHex))
+								wgIpcSet(wgDev, fmt.Sprintf("public_key=%s\nremove=true\n", pubHex))
 								delete(db.Devices, entry.DeviceID)
 							}
 							entry.DeviceID = ""
@@ -978,7 +978,7 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
 							dev, devExists := db.Devices[id]
 							if devExists {
 								pubHex, _ := b64ToHex(dev.PubKey)
-								wgDev.IpcSet(fmt.Sprintf("public_key=%s\nremove=true\n", pubHex))
+								wgIpcSet(wgDev, fmt.Sprintf("public_key=%s\nremove=true\n", pubHex))
 								delete(db.Devices, id)
 							}
 						}
@@ -997,7 +997,7 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
 							dev, devExists := db.Devices[entry.DeviceID]
 							if devExists {
 								pubHex, _ := b64ToHex(dev.PubKey)
-								wgDev.IpcSet(fmt.Sprintf("public_key=%s\nremove=true\n", pubHex))
+								wgIpcSet(wgDev, fmt.Sprintf("public_key=%s\nremove=true\n", pubHex))
 								delete(db.Devices, entry.DeviceID)
 							}
 						}
@@ -1005,7 +1005,7 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
 							dev, devExists := db.Devices[id]
 							if devExists {
 								pubHex, _ := b64ToHex(dev.PubKey)
-								wgDev.IpcSet(fmt.Sprintf("public_key=%s\nremove=true\n", pubHex))
+								wgIpcSet(wgDev, fmt.Sprintf("public_key=%s\nremove=true\n", pubHex))
 								delete(db.Devices, id)
 							}
 						}
@@ -1024,7 +1024,7 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
 					if exists {
 						delete(db.Devices, devID)
 						pubHex, _ := b64ToHex(dev.PubKey)
-						wgDev.IpcSet(fmt.Sprintf("public_key=%s\nremove=true\n", pubHex))
+						wgIpcSet(wgDev, fmt.Sprintf("public_key=%s\nremove=true\n", pubHex))
 						// Очищаем привязку из пароля
 						for _, entry := range db.Passwords {
 							if entry != nil {
@@ -1277,6 +1277,16 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
 	}
 }
 
+// wgIpcSet — nil-безопасная обёртка над wgDev.IpcSet. В режиме -forward
+// встроенный WireGuard не запускается и wgDev == nil, а команды бота
+// (удаление пира и т.п.) всё равно могут прийти.
+func wgIpcSet(wgDev *device.Device, s string) {
+	if wgDev == nil {
+		return
+	}
+	_ = wgDev.IpcSet(s)
+}
+
 func removePeerFromWG(wgDev *device.Device, dev *ClientDevice) {
 	if wgDev == nil || dev == nil || dev.PubKey == "" {
 		return
@@ -1285,7 +1295,7 @@ func removePeerFromWG(wgDev *device.Device, dev *ClientDevice) {
 	if err != nil {
 		return
 	}
-	wgDev.IpcSet(fmt.Sprintf("public_key=%s\nremove=true\n", pubHex))
+	wgIpcSet(wgDev, fmt.Sprintf("public_key=%s\nremove=true\n", pubHex))
 }
 
 func upsertPeerInWG(wgDev *device.Device, dev *ClientDevice) {
@@ -1296,7 +1306,7 @@ func upsertPeerInWG(wgDev *device.Device, dev *ClientDevice) {
 	if err != nil {
 		return
 	}
-	wgDev.IpcSet(fmt.Sprintf("public_key=%s\nallowed_ip=%s/32\n", pubHex, dev.IP))
+	wgIpcSet(wgDev, fmt.Sprintf("public_key=%s\nallowed_ip=%s/32\n", pubHex, dev.IP))
 }
 
 func cleanupExpiredPasswordsLocked(wgDev *device.Device) int {
