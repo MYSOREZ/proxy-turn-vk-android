@@ -91,7 +91,7 @@ fun AccessListScreen(server: ManagedServer, onBack: () -> Unit) {
 
     val deployIp = server.ip
     val deployMainPassword = server.adminApiToken
-    val serverPort = 56002
+    val serverPort = 56102
     val adminCertPin = server.adminCertPin
 
     AdminApiClient.configureServer(deployIp, adminCertPin)
@@ -780,8 +780,8 @@ private fun PasswordDetailsSheet(
     val wdttLink = remember(entry, host, port) {
         // wdtt://<server_ip>:<dtls_port>:<wg_port>:<local_port>:<password>:<vk_hash>
         // wg_port/local_port тут неизвестны админ-API — используем те же
-        // дефолты, что и остальной клиент (56001/9000).
-        "wdtt://$host:$port:56001:9000:${entry.password}:${entry.vkHash}"
+        // дефолты, что и остальной клиент (56101/9000).
+        "wdtt://$host:$port:56101:9000:${entry.password}:${entry.vkHash}"
     }
 
     LaunchedEffect(qwdttLink) {

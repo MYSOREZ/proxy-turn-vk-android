@@ -349,7 +349,7 @@ fun ProfilesTab(
     var deviceStatuses by remember { mutableStateOf<Map<String, ProfileDeviceStatus>>(emptyMap()) }
     var unbindTarget by remember { mutableStateOf<ConnectionProfile?>(null) }
     var unbindOnlyCurrent by remember { mutableStateOf(true) }
-    val savedServerDtlsPort by settingsStore.serverDtlsPort.collectAsStateWithLifecycle(initialValue = 56000)
+    val savedServerDtlsPort by settingsStore.serverDtlsPort.collectAsStateWithLifecycle(initialValue = 56100)
     val savedManualPortsEnabled by settingsStore.manualPortsEnabled.collectAsStateWithLifecycle(initialValue = false)
 
     val subscriptionGroupIds = remember(subscriptions) {
@@ -431,7 +431,7 @@ fun ProfilesTab(
 
     LaunchedEffect(profiles) {
         val androidId = android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: "unknown"
-        val dtlsPort = if (savedManualPortsEnabled) savedServerDtlsPort else 56000
+        val dtlsPort = if (savedManualPortsEnabled) savedServerDtlsPort else 56100
         while (true) {
             profiles.forEach { profile ->
                 if (profile.password.isNotBlank() && profile.peer.isNotBlank()) {
@@ -700,7 +700,7 @@ fun ProfilesTab(
                     onClick = {
                         val androidId = android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: "unknown"
                         val deviceIdToSend = if (unbindOnlyCurrent) androidId else ""
-                        val dtlsPort = if (savedManualPortsEnabled) savedServerDtlsPort else 56000
+                        val dtlsPort = if (savedManualPortsEnabled) savedServerDtlsPort else 56100
                         deviceStatuses = deviceStatuses + (target.id to (deviceStatuses[target.id] ?: ProfileDeviceStatus()).copy(isLoading = true))
                         scope.launch {
                             val success = sendUnbindRequest(target.peer, dtlsPort, target.password, deviceIdToSend)
@@ -1057,7 +1057,7 @@ fun ProfilesTab(
                                 "  \"trafficLimitMb\": 10240,\n" +
                                 "  \"updatedAt\": \"2026-06-24\",\n" +
                                 "  \"profiles\": [\n" +
-                                "    { \"name\": \"Сервер 1\", \"peer\": \"IP:56000\", \"password\": \"...\" }\n" +
+                                "    { \"name\": \"Сервер 1\", \"peer\": \"IP:56100\", \"password\": \"...\" }\n" +
                                 "  ]\n" +
                                 "}",
                                 style = MaterialTheme.typography.bodySmall,
@@ -2002,7 +2002,7 @@ fun ProfilesTab(
     }
 
     showExportSheet?.let { profile ->
-        val exportDtlsPort = if (savedManualPortsEnabled) savedServerDtlsPort else 56000
+        val exportDtlsPort = if (savedManualPortsEnabled) savedServerDtlsPort else 56100
         ExportProfileSheet(
             profile = profile,
             serverDtlsPort = exportDtlsPort,
@@ -2050,7 +2050,7 @@ private fun parseQrConfig(rawText: String): ConnectionProfile? {
             val peerRaw = uri.getQueryParameter("peer") ?: return null
             val dtlsPortParam = uri.getQueryParameter("dtls_port") ?: uri.getQueryParameter("server_port")
             val peer = if (dtlsPortParam != null) {
-                PeerAddress.ensurePort(peerRaw, dtlsPortParam.toIntOrNull()?.coerceIn(1, 65535) ?: 56000)
+                PeerAddress.ensurePort(peerRaw, dtlsPortParam.toIntOrNull()?.coerceIn(1, 65535) ?: 56100)
             } else {
                 peerRaw
             }

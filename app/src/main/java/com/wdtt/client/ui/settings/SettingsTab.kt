@@ -142,8 +142,8 @@ fun SettingsTabContent(
 ) {
     val savedConnectionPassword by settingsStore.connectionPassword.collectAsStateWithLifecycle(initialValue = "")
     val savedManualPortsEnabled by settingsStore.manualPortsEnabled.collectAsStateWithLifecycle(initialValue = false)
-    val savedServerDtlsPort by settingsStore.serverDtlsPort.collectAsStateWithLifecycle(initialValue = 56000)
-    val savedServerWgPort by settingsStore.serverWgPort.collectAsStateWithLifecycle(initialValue = 56001)
+    val savedServerDtlsPort by settingsStore.serverDtlsPort.collectAsStateWithLifecycle(initialValue = 56100)
+    val savedServerWgPort by settingsStore.serverWgPort.collectAsStateWithLifecycle(initialValue = 56101)
     val savedListenPort by settingsStore.listenPort.collectAsStateWithLifecycle(initialValue = 9000)
 
     val tunnelRunning by TunnelManager.running.collectAsStateWithLifecycle()
@@ -221,8 +221,8 @@ fun SettingsTabContent(
     var vkAuthBusy by remember { mutableStateOf(false) }
     var vkLoggedIn by remember { mutableStateOf(false) }
     var manualPortsEnabled by rememberSaveable { mutableStateOf(false) }
-    var serverDtlsPortInput by rememberSaveable { mutableStateOf("56000") }
-    var serverWgPortInput by rememberSaveable { mutableStateOf("56001") }
+    var serverDtlsPortInput by rememberSaveable { mutableStateOf("56100") }
+    var serverWgPortInput by rememberSaveable { mutableStateOf("56101") }
     var showAppSettingsDialog by rememberSaveable { mutableStateOf(false) }
     val openAppSettingsRequest by TunnelManager.openAppSettingsRequest.collectAsStateWithLifecycle()
     var lastHandledOpenSettings by rememberSaveable { mutableLongStateOf(0L) }
@@ -327,7 +327,7 @@ fun SettingsTabContent(
         serverDtlsPortInput = (embeddedPort ?: serverDtlsPort).toString()
         serverWgPortInput = serverWgPort.toString()
         if (embeddedPort != null && PeerAddress.hasExplicitPort(peer)) {
-            if (embeddedPort != 56000) {
+            if (embeddedPort != 56100) {
                 settingsStore.saveManualPortsEnabled(true)
                 manualPortsEnabled = true
             }
@@ -473,7 +473,7 @@ fun SettingsTabContent(
         (socksUsernameInput.isNotBlank() && socksPasswordInput.isNotBlank())
     val isValid = isPeerValid && isHashesValid && savedConnectionPassword.isNotBlank() &&
         !hasInputHashErrors && socksAuthValid
-    val effectiveServerDtlsPort = if (manualPortsEnabled) serverDtlsPortInput.toIntOrNull()?.coerceIn(1, 65535) ?: 56000 else 56000
+    val effectiveServerDtlsPort = if (manualPortsEnabled) serverDtlsPortInput.toIntOrNull()?.coerceIn(1, 65535) ?: 56100 else 56100
     val effectiveLocalPort = if (manualPortsEnabled) portInput.toIntOrNull()?.coerceIn(1, 65535) ?: 9000 else 9000
     fun startTunnelService() {
         val effectiveCaptchaMode = if (autoCaptchaEnabled) "auto" else if (useWVCaptcha) "wv" else "rjs"
@@ -3067,8 +3067,8 @@ fun SecretsDialog(
 ) {
     val scope = rememberCoroutineScope()
     var passwordInput by rememberSaveable { mutableStateOf(initialPassword) }
-    var serverDtlsPort by rememberSaveable { mutableStateOf(initialServerDtlsPort.ifBlank { "56000" }) }
-    var serverWgPort by rememberSaveable { mutableStateOf(initialServerWgPort.ifBlank { "56001" }) }
+    var serverDtlsPort by rememberSaveable { mutableStateOf(initialServerDtlsPort.ifBlank { "56100" }) }
+    var serverWgPort by rememberSaveable { mutableStateOf(initialServerWgPort.ifBlank { "56101" }) }
     var localPort by rememberSaveable { mutableStateOf(initialLocalPort.ifBlank { "9000" }) }
 
     fun normalizePort(value: String, fallback: String): String {
@@ -3122,7 +3122,7 @@ fun SecretsDialog(
                 Spacer(modifier = Modifier.height(8.dp))
                 Text("Порты", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
                 Text(
-                    "Стандартные: DTLS 56000, WireGuard 56001, локальный 9000",
+                    "Стандартные: DTLS 56100, WireGuard 56101, локальный 9000",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -3131,7 +3131,7 @@ fun SecretsDialog(
                     value = serverDtlsPort,
                     onValueChange = { serverDtlsPort = it.filter(Char::isDigit).take(5) },
                     label = { Text("Порт сервера DTLS") },
-                    placeholder = { Text("56000") },
+                    placeholder = { Text("56100") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
@@ -3142,7 +3142,7 @@ fun SecretsDialog(
                     value = serverWgPort,
                     onValueChange = { serverWgPort = it.filter(Char::isDigit).take(5) },
                     label = { Text("Порт сервера WireGuard") },
-                    placeholder = { Text("56001") },
+                    placeholder = { Text("56101") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
@@ -3164,13 +3164,13 @@ fun SecretsDialog(
 
                 Button(
                     onClick = {
-                        val finalDtls = normalizePort(serverDtlsPort, "56000")
-                        val finalWg = normalizePort(serverWgPort, "56001")
+                        val finalDtls = normalizePort(serverDtlsPort, "56100")
+                        val finalWg = normalizePort(serverWgPort, "56101")
                         val finalLocal = normalizePort(localPort, "9000")
                         scope.launch {
                             settingsStore.saveConnectionPassword(passwordInput)
                             settingsStore.savePorts(finalDtls.toInt(), finalWg.toInt(), finalLocal.toInt())
-                            val customPorts = finalDtls != "56000" || finalWg != "56001" || finalLocal != "9000"
+                            val customPorts = finalDtls != "56100" || finalWg != "56101" || finalLocal != "9000"
                             if (customPorts) {
                                 settingsStore.saveManualPortsEnabled(true)
                             }

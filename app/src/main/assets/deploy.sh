@@ -4,29 +4,37 @@
 #  Поддержка: Debian 11+, Ubuntu 20.04+, CentOS/RHEL/Fedora/AlmaLinux/Rocky
 #  Версия: 3.2  |  Дата: 2026-05-13
 #  NAT:  MASQUERADE через iptables
-#  WG:   порт 56001 (не конфликтует с существующим WG на 51820)
-#  DTLS: порт 56000
+#  WG:   порт 56101 (сборка HY2; оригинал использует 56001)
+#  DTLS: порт 56100 (сборка HY2; оригинал использует 56000)
 # ==============================================================================
 set -uo pipefail
-trap 'rm -f /tmp/wdtt-admin.token /tmp/wdtt-main.password /tmp/wdtt-bot.token' EXIT
+trap 'rm -f /tmp/wdtt-hy2-admin.token /tmp/wdtt-hy2-main.password /tmp/wdtt-hy2-bot.token' EXIT
 
 readonly SCRIPT_VERSION="3.2"
-readonly LOG_FILE="/var/log/wdtt-install.log"
-readonly WG_PORT="${WDTT_WG_PORT:-56001}"
-readonly DTLS_PORT="${WDTT_DTLS_PORT:-56000}"
+readonly LOG_FILE="/var/log/wdtt-hy2-install.log"
+readonly WG_PORT="${WDTT_WG_PORT:-56101}"
+readonly DTLS_PORT="${WDTT_DTLS_PORT:-56100}"
 readonly SSH_PORT="${WDTT_SSH_PORT:-22}"
-readonly ADMIN_PORT="${WDTT_ADMIN_PORT:-56002}"
+readonly ADMIN_PORT="${WDTT_ADMIN_PORT:-56102}"
 # Пусто = выключено. Экспериментальный порт для клиентов без DTLS (RTP-obfs AEAD напрямую).
 readonly DIRECT_PORT="${WDTT_DIRECT_PORT:-}"
 # Пусто = выключено. Экспериментальный порт для raw-IP клиентов без WireGuard (свой TUN/NAT).
 readonly RAW_PORT="${WDTT_RAW_PORT:-}"
 readonly ADMIN_ID="${WDTT_ADMIN_ID:-}"
 readonly DNS_SERVERS="${WDTT_DNS_SERVERS:-1.1.1.1,1.0.0.1}"
-readonly WDTT_IFACE="wdtt0"
-readonly WDTT_CONFIG_DIR="/etc/wdtt"
+readonly WDTT_IFACE="wdtthy0"
+readonly WDTT_CONFIG_DIR="/etc/wdtt-hy2"
 readonly WDTT_ACCESS_DB="passwords.json"
-readonly IPT_COMMENT="WDTT_MANAGED"
-readonly IPT_MIRROR_COMMENT="WDTT_MIRRORED"
+readonly IPT_COMMENT="WDTT_HY2_MANAGED"
+# ─── Hysteria2 (сборка HY2) ───
+# Выходная нода этой сборки. Слушает ТОЛЬКО localhost: снаружи в неё
+# попадает исключительно то, что wdtt-hy2-server расшифровал из TURN-
+# туннеля, наружный порт остаётся один — DTLS.
+readonly HY2_PORT="${WDTT_HY2_PORT:-56143}"
+readonly HY2_BIN="/usr/local/bin/hysteria-hy2"
+readonly HY2_DIR="/etc/hysteria-hy2"
+readonly HY2_SNI="${WDTT_HY2_SNI:-bing.com}"
+readonly IPT_MIRROR_COMMENT="WDTT_HY2_MIRRORED"
 
 validate_port() {
     local name="$1" value="$2"
@@ -349,10 +357,10 @@ fw_cleanup_wdtt_rules() {
         for i in {1..5}; do
             local nat_iface
             for nat_iface in "$iface" $(ls /sys/class/net 2>/dev/null || true); do
-                [ -n "$nat_iface" ] && iptables -t nat -D POSTROUTING -s 10.66.0.0/16 -o "$nat_iface" -m comment --comment "$IPT_COMMENT" -j MASQUERADE 2>/dev/null || true
+                [ -n "$nat_iface" ] && iptables -t nat -D POSTROUTING -s 10.77.0.0/16 -o "$nat_iface" -m comment --comment "$IPT_COMMENT" -j MASQUERADE 2>/dev/null || true
             done
-            iptables -t mangle -D FORWARD -s 10.66.0.0/16 -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "$IPT_COMMENT" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
-            iptables -t mangle -D FORWARD -d 10.66.0.0/16 -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "$IPT_COMMENT" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+            iptables -t mangle -D FORWARD -s 10.77.0.0/16 -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "$IPT_COMMENT" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+            iptables -t mangle -D FORWARD -d 10.77.0.0/16 -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "$IPT_COMMENT" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
             iptables -D INPUT -p udp --dport ${DTLS_PORT} -m comment --comment "$IPT_COMMENT" -j ACCEPT 2>/dev/null || true
             iptables -D INPUT -p tcp --dport ${DTLS_PORT} -m comment --comment "$IPT_COMMENT" -j ACCEPT 2>/dev/null || true
             iptables -D INPUT -p udp --dport ${WG_PORT} -m comment --comment "$IPT_COMMENT" -j ACCEPT 2>/dev/null || true
@@ -386,12 +394,12 @@ wdtt_cleanup() {
     prog 0.05 "Очистка..."
     echo "🧹 Очистка старой установки WDTT..."
 
-    systemctl unmask wdtt 2>/dev/null || true
-    systemctl stop wdtt 2>/dev/null || true
-    systemctl disable wdtt 2>/dev/null || true
-    rm -f /etc/systemd/system/wdtt.service 2>/dev/null || true
+    systemctl unmask wdtt-hy2 2>/dev/null || true
+    systemctl stop wdtt-hy2 2>/dev/null || true
+    systemctl disable wdtt-hy2 2>/dev/null || true
+    rm -f /etc/systemd/system/wdtt-hy2.service 2>/dev/null || true
     systemctl daemon-reload 2>/dev/null || true
-    pkill -x wdtt-server 2>/dev/null || killall wdtt-server 2>/dev/null || true
+    pkill -x wdtt-hy2-server 2>/dev/null || killall wdtt-hy2-server 2>/dev/null || true
 
     # Удаляем только собственный интерфейс WDTT.
     ip link show "$WDTT_IFACE" >/dev/null 2>&1 && ip link del "$WDTT_IFACE" 2>/dev/null || true
@@ -399,7 +407,7 @@ wdtt_cleanup() {
     # Удаляем старые правила NAT для WDTT подсети
     fw_cleanup_wdtt_rules "$(detect_wan_interface)"
 
-    rm -f /usr/local/bin/wdtt-server 2>/dev/null || true
+    rm -f /usr/local/bin/wdtt-hy2-server 2>/dev/null || true
     cleanup_config_dir_keep_access_db
 
     echo "✓ Очистка завершена (база доступа сохранена)"
@@ -412,11 +420,11 @@ setup_sysctl() {
 
     echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true
     mkdir -p /etc/sysctl.d
-    cat > /etc/sysctl.d/99-wdtt.conf << 'SYSEOF'
+    cat > /etc/sysctl.d/99-wdtt-hy2.conf << 'SYSEOF'
 net.ipv4.ip_forward = 1
 SYSEOF
 
-    sysctl -p /etc/sysctl.d/99-wdtt.conf >/dev/null 2>&1 || true
+    sysctl -p /etc/sysctl.d/99-wdtt-hy2.conf >/dev/null 2>&1 || true
 
     echo "✓ Sysctl настроен"
 }
@@ -431,15 +439,15 @@ setup_nat_and_firewall() {
 
     if [ -z "$iface" ]; then
         log_warn "Не удалось определить WAN-интерфейс!"
-        log_warn "Настройте NAT вручную для подсети 10.66.0.0/16."
+        log_warn "Настройте NAT вручную для подсети 10.77.0.0/16."
         return 0
     fi
 
     log_info "WAN-интерфейс: $iface"
 
     # === WDTT порты ===
-    fw_add_input_udp "$DTLS_PORT"   # 56000 — DTLS сервер
-    fw_add_input_tcp "$DTLS_PORT"   # 56000 — API (TCP)
+    fw_add_input_udp "$DTLS_PORT"   # DTLS сервер
+    fw_add_input_tcp "$DTLS_PORT"   # API (TCP)
     fw_restrict_wg_to_loopback
     fw_add_input_tcp "$ADMIN_PORT"
     fw_add_input_tcp "$SSH_PORT"    # SSH порт, указанный пользователем в приложении
@@ -454,15 +462,15 @@ setup_nat_and_firewall() {
     fw_add_forward
 
     # === NAT: MASQUERADE для подсети WireGuard ===
-    fw_add_masquerade "$iface" "10.66.0.0/16"
+    fw_add_masquerade "$iface" "10.77.0.0/16"
     
     # === MSS Clamping для исправления MTU (DonationAlerts / Cloudflare) ===
-    fw_add_mss_clamping "10.66.0.0/16"
+    fw_add_mss_clamping "10.77.0.0/16"
 
     if [ "$FW_BACKEND" = "none" ]; then
         echo "⚠ NAT не настроен автоматически: firewall-бэкенд отсутствует"
     else
-        echo "✓ NAT: MASQUERADE на $iface для 10.66.0.0/16"
+        echo "✓ NAT: MASQUERADE на $iface для 10.77.0.0/16"
     fi
     echo "✓ Порты: ${DTLS_PORT}/udp(DTLS), ${WG_PORT}/udp(WG), ${SSH_PORT}/tcp(SSH)"
     echo "✓ TCP MSS Clamping включен"
@@ -473,25 +481,25 @@ setup_wdtt_binary() {
     prog 0.60 "Бинарник..."
     echo "📦 Установка wdtt-server..."
 
-    if [ -f /tmp/wdtt-server ]; then
-        chmod +x /tmp/wdtt-server
-        install -m 0755 /tmp/wdtt-server /usr/local/bin/wdtt-server 2>/dev/null || mv /tmp/wdtt-server /usr/local/bin/wdtt-server
+    if [ -f /tmp/wdtt-hy2-server ]; then
+        chmod +x /tmp/wdtt-hy2-server
+        install -m 0755 /tmp/wdtt-hy2-server /usr/local/bin/wdtt-hy2-server 2>/dev/null || mv /tmp/wdtt-hy2-server /usr/local/bin/wdtt-hy2-server
         echo "✓ wdtt-server установлен"
-    elif [ -f /usr/local/bin/wdtt-server ]; then
+    elif [ -f /usr/local/bin/wdtt-hy2-server ]; then
         echo "✓ wdtt-server уже установлен"
     else
         echo "⚠ wdtt-server не найден в /tmp/ — пропускаем"
-        echo "  Загрузите бинарник вручную в /usr/local/bin/wdtt-server"
+        echo "  Загрузите бинарник вручную в /usr/local/bin/wdtt-hy2-server"
     fi
 
     mkdir -p "$WDTT_CONFIG_DIR"
 }
 
 setup_admin_tls() {
-    [ -s /tmp/wdtt-admin.token ] || die "Токен защищённой админ-панели не загружен"
-    cp /tmp/wdtt-admin.token "$WDTT_CONFIG_DIR/admin.token"
+    [ -s /tmp/wdtt-hy2-admin.token ] || die "Токен защищённой админ-панели не загружен"
+    cp /tmp/wdtt-hy2-admin.token "$WDTT_CONFIG_DIR/admin.token"
     chmod 0600 "$WDTT_CONFIG_DIR/admin.token"
-    rm -f /tmp/wdtt-admin.token
+    rm -f /tmp/wdtt-hy2-admin.token
     if [ ! -s "$WDTT_CONFIG_DIR/admin.crt" ] || [ ! -s "$WDTT_CONFIG_DIR/admin.key" ]; then
         openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 3650 \
             -keyout "$WDTT_CONFIG_DIR/admin.key" \
@@ -506,15 +514,15 @@ setup_admin_tls() {
 }
 
 setup_server_secrets() {
-    [ -s /tmp/wdtt-main.password ] || die "Пароль владельца не загружен"
-    install -m 0600 /tmp/wdtt-main.password "$WDTT_CONFIG_DIR/main.password"
-    rm -f /tmp/wdtt-main.password
-    if [ -s /tmp/wdtt-bot.token ]; then
-        install -m 0600 /tmp/wdtt-bot.token "$WDTT_CONFIG_DIR/bot.token"
+    [ -s /tmp/wdtt-hy2-main.password ] || die "Пароль владельца не загружен"
+    install -m 0600 /tmp/wdtt-hy2-main.password "$WDTT_CONFIG_DIR/main.password"
+    rm -f /tmp/wdtt-hy2-main.password
+    if [ -s /tmp/wdtt-hy2-bot.token ]; then
+        install -m 0600 /tmp/wdtt-hy2-bot.token "$WDTT_CONFIG_DIR/bot.token"
     else
         rm -f "$WDTT_CONFIG_DIR/bot.token"
     fi
-    rm -f /tmp/wdtt-bot.token
+    rm -f /tmp/wdtt-hy2-bot.token
 }
 
 # ─── Systemd-сервис WDTT ─────────────────────────────────────────────────────
@@ -546,7 +554,7 @@ setup_wdtt_service() {
         admin_exec_arg="-admin ${ADMIN_ID}"
     fi
 
-    cat > /etc/systemd/system/wdtt.service << WDTTSVC
+    cat > /etc/systemd/system/wdtt-hy2.service << WDTTSVC
 [Unit]
 Description=WDTT VPN Server
 After=network.target network-online.target
@@ -556,7 +564,7 @@ Wants=network-online.target
 Type=simple
 ExecStartPre=-/usr/bin/env bash -c "ip link show ${WDTT_IFACE} >/dev/null 2>&1 && ip link del ${WDTT_IFACE} 2>/dev/null || true"
 ExecStartPre=-/usr/bin/env bash -c "if command -v iptables >/dev/null 2>&1; then iptables -C INPUT -p udp --dport ${DTLS_PORT} -m comment --comment ${IPT_COMMENT} -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport ${DTLS_PORT} -m comment --comment ${IPT_COMMENT} -j ACCEPT; iptables -C INPUT -p tcp --dport ${DTLS_PORT} -m comment --comment ${IPT_COMMENT} -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport ${DTLS_PORT} -m comment --comment ${IPT_COMMENT} -j ACCEPT; iptables -C INPUT -i lo -p udp --dport ${WG_PORT} -m comment --comment WDTT_WG_INTERNAL -j ACCEPT 2>/dev/null || iptables -I INPUT -i lo -p udp --dport ${WG_PORT} -m comment --comment WDTT_WG_INTERNAL -j ACCEPT; iptables -C INPUT ! -i lo -p udp --dport ${WG_PORT} -m comment --comment WDTT_WG_INTERNAL -j DROP 2>/dev/null || iptables -I INPUT ! -i lo -p udp --dport ${WG_PORT} -m comment --comment WDTT_WG_INTERNAL -j DROP; iptables -C INPUT -p tcp --dport ${ADMIN_PORT} -m comment --comment ${IPT_COMMENT} -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport ${ADMIN_PORT} -m comment --comment ${IPT_COMMENT} -j ACCEPT; iptables -C INPUT -p tcp --dport ${SSH_PORT} -m comment --comment ${IPT_COMMENT} -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport ${SSH_PORT} -m comment --comment ${IPT_COMMENT} -j ACCEPT; ${direct_fw_rule}${raw_fw_rule}fi"
-ExecStart=/usr/local/bin/wdtt-server -listen 0.0.0.0:${DTLS_PORT} -wg-port ${WG_PORT} -config-dir ${WDTT_CONFIG_DIR} -password-file ${WDTT_CONFIG_DIR}/main.password ${admin_exec_arg} ${bot_exec_arg} -dns ${DNS_SERVERS} -admin-listen 0.0.0.0:${ADMIN_PORT} -admin-token-file ${WDTT_CONFIG_DIR}/admin.token -admin-cert ${WDTT_CONFIG_DIR}/admin.crt -admin-key ${WDTT_CONFIG_DIR}/admin.key ${direct_exec_arg} ${raw_exec_arg}
+ExecStart=/usr/local/bin/wdtt-hy2-server -listen 0.0.0.0:${DTLS_PORT} -forward 127.0.0.1:${HY2_PORT} -wg-iface ${WDTT_IFACE} -wg-port ${WG_PORT} -config-dir ${WDTT_CONFIG_DIR} -password-file ${WDTT_CONFIG_DIR}/main.password ${admin_exec_arg} ${bot_exec_arg} -dns ${DNS_SERVERS} -admin-listen 0.0.0.0:${ADMIN_PORT} -admin-token-file ${WDTT_CONFIG_DIR}/admin.token -admin-cert ${WDTT_CONFIG_DIR}/admin.crt -admin-key ${WDTT_CONFIG_DIR}/admin.key ${direct_exec_arg} ${raw_exec_arg}
 Restart=always
 RestartSec=5
 LimitNOFILE=65535
@@ -567,9 +575,9 @@ WantedBy=multi-user.target
 WDTTSVC
 
     systemctl daemon-reload
-    systemctl unmask wdtt >/dev/null 2>&1 || true
-    systemctl enable wdtt >/dev/null 2>&1 || true
-    echo "✓ Сервис wdtt.service создан и включён"
+    systemctl unmask wdtt-hy2 >/dev/null 2>&1 || true
+    systemctl enable wdtt-hy2 >/dev/null 2>&1 || true
+    echo "✓ Сервис wdtt-hy2.service создан и включён"
 }
 
 # ─── Запуск WDTT ─────────────────────────────────────────────────────────────
@@ -577,16 +585,16 @@ start_wdtt() {
     prog 0.90 "Запуск..."
     echo "🚀 Запуск WDTT VPN Server..."
 
-    if [ ! -f /usr/local/bin/wdtt-server ]; then
+    if [ ! -f /usr/local/bin/wdtt-hy2-server ]; then
         echo "⚠ wdtt-server не установлен — запуск пропущен"
         return 0
     fi
 
-    systemctl restart wdtt
+    systemctl restart wdtt-hy2
 
     sleep 2
     local status
-    status=$(systemctl is-active wdtt 2>/dev/null || echo "unknown")
+    status=$(systemctl is-active wdtt-hy2 2>/dev/null || echo "unknown")
 
     prog 1.0 "Готово!"
 
@@ -603,33 +611,39 @@ start_wdtt() {
     else
         echo "⚠️ Сервис wdtt не запустился. Статус: $status"
         echo "   Последние логи:"
-        journalctl -u wdtt -n 7 --no-pager 2>/dev/null | sed 's/^/   >> /'
+        journalctl -u wdtt-hy2 -n 7 --no-pager 2>/dev/null | sed 's/^/   >> /'
         echo "WDTT_DEPLOY_SERVICE_FAILED"
     fi
 
-    echo "   Логи:   journalctl -u wdtt -f"
-    echo "   Статус: systemctl status wdtt"
+    echo "   Логи:   journalctl -u wdtt-hy2 -f"
+    echo "   Статус: systemctl status wdtt-hy2"
     echo "══════════════════════════════════════════════════════════════"
     echo ""
 }
 
 # ─── Команда: uninstall ──────────────────────────────────────────────────────
 do_uninstall() {
+    # Сборка HY2: свой Hysteria2 тоже убираем (оригинальной установки не касается)
+    systemctl disable --now hysteria-hy2.service 2>/dev/null || true
+    rm -f /etc/systemd/system/hysteria-hy2.service 2>/dev/null || true
+    rm -rf "$HY2_DIR" 2>/dev/null || true
+    rm -f "$HY2_BIN" 2>/dev/null || true
+
     log_step "Удаление WDTT..."
 
-    systemctl stop wdtt 2>/dev/null || true
-    systemctl disable wdtt 2>/dev/null || true
-    rm -f /etc/systemd/system/wdtt.service
+    systemctl stop wdtt-hy2 2>/dev/null || true
+    systemctl disable wdtt-hy2 2>/dev/null || true
+    rm -f /etc/systemd/system/wdtt-hy2.service
     systemctl daemon-reload
 
     ip link show "$WDTT_IFACE" >/dev/null 2>&1 && ip link del "$WDTT_IFACE" 2>/dev/null || true
-    pkill -x wdtt-server 2>/dev/null || true
+    pkill -x wdtt-hy2-server 2>/dev/null || true
 
     fw_cleanup_wdtt_rules "$(detect_wan_interface)"
 
-    rm -f /usr/local/bin/wdtt-server
+    rm -f /usr/local/bin/wdtt-hy2-server
     cleanup_config_dir_keep_access_db
-    rm -f /etc/sysctl.d/99-wdtt.conf
+    rm -f /etc/sysctl.d/99-wdtt-hy2.conf
     sysctl --system >/dev/null 2>&1 || true
 
     log_info "WDTT удалён. База доступа сохранена: ${WDTT_CONFIG_DIR}/${WDTT_ACCESS_DB}"
@@ -639,12 +653,12 @@ do_uninstall() {
 do_status() {
     echo "Статус WDTT:"
     echo ""
-    if systemctl is-active wdtt &>/dev/null; then
+    if systemctl is-active wdtt-hy2 &>/dev/null; then
         log_info "Сервис: АКТИВЕН"
     else
         log_warn "Сервис: НЕ АКТИВЕН"
     fi
-    if [ -f /usr/local/bin/wdtt-server ]; then
+    if [ -f /usr/local/bin/wdtt-hy2-server ]; then
         log_info "Бинарник: установлен"
     else
         log_warn "Бинарник: НЕ найден"
@@ -659,6 +673,94 @@ do_status() {
 # ══════════════════════════════════════════════════════════════════════════════
 #  MAIN
 # ══════════════════════════════════════════════════════════════════════════════
+# ─── Установка и настройка Hysteria2 ───────────────────────────────────
+install_hysteria2() {
+    log_step "Hysteria2"
+    mkdir -p "$HY2_DIR"; chmod 700 "$HY2_DIR"
+
+    if [ ! -x "$HY2_BIN" ]; then
+        local arch
+        case "$(uname -m)" in
+            x86_64)  arch="amd64" ;;
+            aarch64) arch="arm64" ;;
+            *) die "Hysteria2: неподдерживаемая архитектура $(uname -m)" ;;
+        esac
+        log_info "Скачиваю Hysteria2 (${arch})..."
+        curl -fsSL -o "$HY2_BIN" \
+            "https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-${arch}" \
+            || die "Hysteria2 не скачался"
+        chmod 755 "$HY2_BIN"
+    else
+        log_info "Hysteria2 уже установлен"
+    fi
+
+    if [ ! -f "$HY2_DIR/server.crt" ] || [ ! -f "$HY2_DIR/server.key" ]; then
+        log_info "Генерирую сертификат (CN=${HY2_SNI})..."
+        openssl ecparam -name prime256v1 -genkey -noout -out "$HY2_DIR/server.key" 2>/dev/null \
+            || die "Hysteria2: не создался ключ"
+        openssl req -new -x509 -days 3650 -key "$HY2_DIR/server.key" \
+            -out "$HY2_DIR/server.crt" -subj "/CN=${HY2_SNI}" 2>/dev/null \
+            || die "Hysteria2: не создался сертификат"
+        chmod 600 "$HY2_DIR/server.key"
+    fi
+
+    # Пароль Hysteria2 = пароль подключения qWDTT: приложение передаёт его
+    # в оба места само, отдельного поля в интерфейсе не нужно.
+    local hy2_pass
+    hy2_pass="$(cat "${WDTT_CONFIG_DIR}/main.password" 2>/dev/null || true)"
+    [ -n "$hy2_pass" ] || die "Hysteria2: пустой пароль (${WDTT_CONFIG_DIR}/main.password)"
+
+    cat > "$HY2_DIR/config.yaml" <<HY2CFG
+listen: 127.0.0.1:${HY2_PORT}
+
+tls:
+  cert: ${HY2_DIR}/server.crt
+  key: ${HY2_DIR}/server.key
+
+auth:
+  type: password
+  password: ${hy2_pass}
+
+# Полосу намеренно не фиксируем — тогда работает BBR. Brutal включается
+# уже на клиенте флагами -hy2-up/-hy2-down, так можно сравнить оба, не
+# переустанавливая сервер.
+ignoreClientBandwidth: false
+
+masquerade:
+  type: proxy
+  proxy:
+    url: https://${HY2_SNI}/
+    rewriteHost: true
+HY2CFG
+    chmod 600 "$HY2_DIR/config.yaml"
+
+    cat > /etc/systemd/system/hysteria-hy2.service <<HY2SVC
+[Unit]
+Description=Hysteria2 (выходная нода сборки qWDTT-HY2)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${HY2_BIN} server -c ${HY2_DIR}/config.yaml
+Restart=always
+RestartSec=3
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+HY2SVC
+
+    systemctl daemon-reload
+    systemctl enable --now hysteria-hy2.service >/dev/null 2>&1 || true
+    sleep 1
+    if systemctl is-active --quiet hysteria-hy2.service; then
+        log_info "Hysteria2 работает на 127.0.0.1:${HY2_PORT}"
+    else
+        log_warn "Hysteria2 не поднялся — journalctl -u hysteria-hy2 -n 50"
+    fi
+}
+
+
 main() {
     echo "╔══════════════════════════════════════════════════════════════╗"
     echo "║       WDTT VPN Server — Installer v${SCRIPT_VERSION}                    ║"
@@ -671,6 +773,7 @@ main() {
     validate_port "WDTT_WG_PORT" "$WG_PORT"
     validate_port "WDTT_SSH_PORT" "$SSH_PORT"
     validate_port "WDTT_ADMIN_PORT" "$ADMIN_PORT"
+    validate_port "WDTT_HY2_PORT" "$HY2_PORT"
     [ -n "$DIRECT_PORT" ] && validate_port "WDTT_DIRECT_PORT" "$DIRECT_PORT"
     [ -n "$RAW_PORT" ] && validate_port "WDTT_RAW_PORT" "$RAW_PORT"
     validate_admin_id
@@ -694,6 +797,7 @@ main() {
             setup_wdtt_binary
             setup_admin_tls
             setup_server_secrets
+            install_hysteria2
             setup_wdtt_service
             start_wdtt
             ;;

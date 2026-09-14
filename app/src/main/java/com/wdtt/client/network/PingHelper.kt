@@ -44,7 +44,7 @@ object PingHelper {
 
             val store = SettingsStore(context)
             val manualPorts = store.manualPortsEnabled.first()
-            val defaultPort = if (manualPorts) store.serverDtlsPort.first() else 56000
+            val defaultPort = if (manualPorts) store.serverDtlsPort.first() else 56100
             val peerWithPort = PeerAddress.ensurePort(profile.peer, defaultPort)
 
             val goDnsArg = store.resolveGoDnsArg()

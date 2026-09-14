@@ -154,6 +154,9 @@ tasks.register<Exec>("buildServerAsset") {
         "go",
         "build",
         "-trimpath",
+        // -s -w выкидывает таблицу символов и DWARF: бинарник едет внутри APK,
+        // отладочная информация в нём никому не нужна, а вес заметный.
+        "-ldflags=-s -w",
         "-o",
         rootDir.resolve("app/src/main/assets/server").absolutePath,
         "./server",

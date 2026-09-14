@@ -39,7 +39,7 @@ import java.net.URLEncoder
 @Composable
 fun ExportProfileSheet(
     profile: ConnectionProfile,
-    serverDtlsPort: Int = 56000,
+    serverDtlsPort: Int = 56100,
     onDismissRequest: () -> Unit
 ) {
     val context = LocalContext.current

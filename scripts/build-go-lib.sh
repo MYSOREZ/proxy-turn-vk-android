@@ -84,7 +84,7 @@ echo "Building $ABI -> $OUT_DIR/libclient.so"
   cd "$GO_DIR"
   if needs_checklinkname_flag; then
     GOOS=android GOARCH="$GOARCH" CGO_ENABLED=1 CC="$CC" \
-      go build -trimpath -ldflags=-checklinkname=0 -o "$OUT_DIR/libclient.so" .
+      go build -trimpath -ldflags="-checklinkname=0 -s -w" -o "$OUT_DIR/libclient.so" .
   else
     GOOS=android GOARCH="$GOARCH" CGO_ENABLED=1 CC="$CC" \
       go build -trimpath -o "$OUT_DIR/libclient.so" .

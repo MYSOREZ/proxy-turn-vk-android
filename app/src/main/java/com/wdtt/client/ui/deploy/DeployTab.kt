@@ -120,9 +120,9 @@ fun DeployScreen(initialServerId: String?, onBack: () -> Unit) {
     val flowBotToken by settingsStore.deployBotToken.collectAsStateWithLifecycle(initialValue = "")
     val flowSshPort by settingsStore.deploySshPort.collectAsStateWithLifecycle(initialValue = "22")
     val flowManualPorts by settingsStore.manualPortsEnabled.collectAsStateWithLifecycle(initialValue = false)
-    val flowServerDtlsPort by settingsStore.serverDtlsPort.collectAsStateWithLifecycle(initialValue = 56000)
-    val flowServerWgPort by settingsStore.serverWgPort.collectAsStateWithLifecycle(initialValue = 56001)
-    val savedServerDirectPort by settingsStore.serverDirectPort.collectAsStateWithLifecycle(initialValue = 56002)
+    val flowServerDtlsPort by settingsStore.serverDtlsPort.collectAsStateWithLifecycle(initialValue = 56100)
+    val flowServerWgPort by settingsStore.serverWgPort.collectAsStateWithLifecycle(initialValue = 56101)
+    val savedServerDirectPort by settingsStore.serverDirectPort.collectAsStateWithLifecycle(initialValue = 56102)
     val savedServerRawPort by settingsStore.serverRawPort.collectAsStateWithLifecycle(initialValue = 56003)
 
     // Локальный (не Flow) state для полей "секретов" формы — как ip/login/
@@ -141,8 +141,8 @@ fun DeployScreen(initialServerId: String?, onBack: () -> Unit) {
     var botToken by remember { mutableStateOf("") }
     var sshPort by remember { mutableStateOf("22") }
     var manualPorts by remember { mutableStateOf(false) }
-    var serverDtlsPort by remember { mutableIntStateOf(56000) }
-    var serverWgPort by remember { mutableIntStateOf(56001) }
+    var serverDtlsPort by remember { mutableIntStateOf(56100) }
+    var serverWgPort by remember { mutableIntStateOf(56101) }
     var adminApiToken by remember { mutableStateOf("") }
     var adminCertPin by remember { mutableStateOf("") }
 
@@ -484,8 +484,8 @@ fun DeployScreen(initialServerId: String?, onBack: () -> Unit) {
                 onClick = {
                     if (ip.isBlank() || !hasSshCredentials || mainPass.isBlank()) return@Button
                     val effectiveLogin = if (login.isBlank()) "root" else login
-                    val effectiveDtlsPort = if (manualPorts) serverDtlsPort.coerceIn(1, 65535) else 56000
-                    val effectiveWgPort = if (manualPorts) serverWgPort.coerceIn(1, 65535) else 56001
+                    val effectiveDtlsPort = if (manualPorts) serverDtlsPort.coerceIn(1, 65535) else 56100
+                    val effectiveWgPort = if (manualPorts) serverWgPort.coerceIn(1, 65535) else 56101
                     // Direct/Raw включаются на сервере ВСЕГДА, а не только когда совпадают с
                     // режимом, выбранным сейчас на этом телефоне — иначе один деплой гасит
                     // порт другого транспорта, и переключение клиента между режимами требует
@@ -904,8 +904,8 @@ fun DeployScreen(initialServerId: String?, onBack: () -> Unit) {
                 onConfirm = {
                     showUninstallDialog = false
                     val effectiveLogin = if (login.isBlank()) "root" else login
-                    val effectiveDtlsPort = if (manualPorts) serverDtlsPort.coerceIn(1, 65535) else 56000
-                    val effectiveWgPort = if (manualPorts) serverWgPort.coerceIn(1, 65535) else 56001
+                    val effectiveDtlsPort = if (manualPorts) serverDtlsPort.coerceIn(1, 65535) else 56100
+                    val effectiveWgPort = if (manualPorts) serverWgPort.coerceIn(1, 65535) else 56101
                     val sshAuth = buildSshAuth(
                         useKey = sshUseKey,
                         password = password,
@@ -1360,11 +1360,11 @@ private suspend fun performDeploy(
         }
 
         onProgress(0.06f, "Загрузка на сервер...")
-        ssh.upload(scriptFile, "/tmp/deploy.sh")
-        ssh.upload(serverFile, "/tmp/wdtt-server")
-        ssh.upload(adminTokenFile, "/tmp/wdtt-admin.token")
-        ssh.upload(mainPasswordFile, "/tmp/wdtt-main.password")
-        ssh.upload(botTokenFile, "/tmp/wdtt-bot.token")
+        ssh.upload(scriptFile, "/tmp/deploy-hy2.sh")
+        ssh.upload(serverFile, "/tmp/wdtt-hy2-server")
+        ssh.upload(adminTokenFile, "/tmp/wdtt-hy2-admin.token")
+        ssh.upload(mainPasswordFile, "/tmp/wdtt-hy2-main.password")
+        ssh.upload(botTokenFile, "/tmp/wdtt-hy2-bot.token")
         scriptFile.delete()
         serverFile.delete()
         adminTokenFile.delete()
@@ -1375,7 +1375,7 @@ private suspend fun performDeploy(
         val directPortEnv = if (directPort != null) "WDTT_DIRECT_PORT=$directPort " else ""
         val rawPortEnv = if (rawPort != null) "WDTT_RAW_PORT=$rawPort " else ""
         val output = ssh.exec(
-            rootCommand("chmod 600 /tmp/wdtt-admin.token /tmp/wdtt-main.password /tmp/wdtt-bot.token && env WDTT_ADMIN_ID=${shellQuote(adminId)} WDTT_DNS_SERVERS=${shellQuote(dnsServers)} WDTT_DTLS_PORT=$dtlsPort WDTT_WG_PORT=$wgPort WDTT_SSH_PORT=$port ${directPortEnv}${rawPortEnv}bash /tmp/deploy.sh"),
+            rootCommand("chmod 600 /tmp/wdtt-hy2-admin.token /tmp/wdtt-hy2-main.password /tmp/wdtt-hy2-bot.token && env WDTT_ADMIN_ID=${shellQuote(adminId)} WDTT_DNS_SERVERS=${shellQuote(dnsServers)} WDTT_DTLS_PORT=$dtlsPort WDTT_WG_PORT=$wgPort WDTT_SSH_PORT=$port ${directPortEnv}${rawPortEnv}bash /tmp/deploy-hy2.sh"),
             timeout = CMD_TIMEOUT
         )
         val certPin = Regex("WDTT_ADMIN_PIN\\|(sha256/[A-Za-z0-9+/=]+)")
@@ -1451,8 +1451,8 @@ internal suspend fun performMultiDeploy(
         try {
             DeployManager.startDeploy()
             val effectiveLogin = server.sshLogin.ifBlank { "root" }
-            val effectiveDtlsPort = if (server.manualPortsEnabled) server.dtlsPort.coerceIn(1, 65535) else 56000
-            val effectiveWgPort = if (server.manualPortsEnabled) server.wgPort.coerceIn(1, 65535) else 56001
+            val effectiveDtlsPort = if (server.manualPortsEnabled) server.dtlsPort.coerceIn(1, 65535) else 56100
+            val effectiveWgPort = if (server.manualPortsEnabled) server.wgPort.coerceIn(1, 65535) else 56101
             val sshAuth = buildSshAuth(
                 useKey = server.sshUseKey,
                 password = server.sshPassword,
@@ -1511,20 +1511,20 @@ private suspend fun performUninstall(
         onProgress(0.15f, "Остановка сервиса...")
         ssh.exec(
             rootCommand(
-                "systemctl unmask wdtt 2>/dev/null || true; " +
-                    "systemctl stop wdtt 2>/dev/null || true; " +
-                    "systemctl disable wdtt 2>/dev/null || true; " +
-                    "rm -f /etc/systemd/system/wdtt.service; " +
+                "systemctl unmask wdtt-hy2 2>/dev/null || true; " +
+                    "systemctl stop wdtt-hy2 2>/dev/null || true; " +
+                    "systemctl disable wdtt-hy2 2>/dev/null || true; " +
+                    "rm -f /etc/systemd/system/wdtt-hy2.service; rm -f /etc/systemd/system/hysteria-hy2.service; " +
                     "systemctl daemon-reload 2>/dev/null || true"
             ),
             timeout = 15000L
         )
 
         onProgress(0.30f, "Удаление через deploy.sh...")
-        ssh.exec(rootCommand("[ -f /tmp/deploy.sh ] && env WDTT_DTLS_PORT=$dtlsPort WDTT_WG_PORT=$wgPort WDTT_SSH_PORT=$port bash /tmp/deploy.sh uninstall 2>/dev/null || true"), timeout = 30000L)
+        ssh.exec(rootCommand("[ -f /tmp/deploy-hy2.sh ] && env WDTT_DTLS_PORT=$dtlsPort WDTT_WG_PORT=$wgPort WDTT_SSH_PORT=$port bash /tmp/deploy-hy2.sh uninstall 2>/dev/null || true"), timeout = 30000L)
 
         onProgress(0.45f, "Удаление бинарника...")
-        ssh.exec(rootCommand("pkill -x wdtt-server 2>/dev/null || true; rm -f /usr/local/bin/wdtt-server"), timeout = 10000L)
+        ssh.exec(rootCommand("systemctl stop hysteria-hy2 2>/dev/null || true; systemctl disable hysteria-hy2 2>/dev/null || true; pkill -x wdtt-hy2-server 2>/dev/null || true; rm -f /usr/local/bin/wdtt-hy2-server /usr/local/bin/hysteria-hy2; rm -rf /etc/hysteria-hy2"), timeout = 10000L)
 
         onProgress(0.60f, "Очистка firewall...")
         ssh.exec(
@@ -1532,17 +1532,17 @@ private suspend fun performUninstall(
                 "if command -v iptables >/dev/null 2>&1; then " +
                     "for i in 1 2 3 4 5; do " +
                     "for iface in $(ls /sys/class/net 2>/dev/null || true); do " +
-                    "iptables -t nat -D POSTROUTING -s 10.66.0.0/16 -o \"${'$'}iface\" -m comment --comment WDTT_MANAGED -j MASQUERADE 2>/dev/null || true; " +
+                    "iptables -t nat -D POSTROUTING -s 10.77.0.0/16 -o \"${'$'}iface\" -m comment --comment WDTT_HY2_MANAGED -j MASQUERADE 2>/dev/null || true; " +
                     "done; " +
-                    "iptables -D INPUT -p udp --dport $dtlsPort -m comment --comment WDTT_MANAGED -j ACCEPT 2>/dev/null || true; " +
-                    "iptables -D INPUT -p udp --dport $wgPort -m comment --comment WDTT_MANAGED -j ACCEPT 2>/dev/null || true; " +
-                    "iptables -D INPUT -p udp --dport 56000 -m comment --comment WDTT_MANAGED -j ACCEPT 2>/dev/null || true; " +
-                    "iptables -D INPUT -p udp --dport 56001 -m comment --comment WDTT_MANAGED -j ACCEPT 2>/dev/null || true; " +
-                    "iptables -D INPUT -p tcp --dport 56002 -m comment --comment WDTT_MANAGED -j ACCEPT 2>/dev/null || true; " +
-                    "iptables -D INPUT -p tcp --dport $port -m comment --comment WDTT_MANAGED -j ACCEPT 2>/dev/null || true; " +
-                    "iptables -D INPUT -p tcp --dport 22 -m comment --comment WDTT_MANAGED -j ACCEPT 2>/dev/null || true; " +
-                    "iptables -D FORWARD -i wdtt0 -m comment --comment WDTT_MANAGED -j ACCEPT 2>/dev/null || true; " +
-                    "iptables -D FORWARD -o wdtt0 -m comment --comment WDTT_MANAGED -j ACCEPT 2>/dev/null || true; " +
+                    "iptables -D INPUT -p udp --dport $dtlsPort -m comment --comment WDTT_HY2_MANAGED -j ACCEPT 2>/dev/null || true; " +
+                    "iptables -D INPUT -p udp --dport $wgPort -m comment --comment WDTT_HY2_MANAGED -j ACCEPT 2>/dev/null || true; " +
+                    "iptables -D INPUT -p udp --dport 56100 -m comment --comment WDTT_HY2_MANAGED -j ACCEPT 2>/dev/null || true; " +
+                    "iptables -D INPUT -p udp --dport 56101 -m comment --comment WDTT_HY2_MANAGED -j ACCEPT 2>/dev/null || true; " +
+                    "iptables -D INPUT -p tcp --dport 56102 -m comment --comment WDTT_HY2_MANAGED -j ACCEPT 2>/dev/null || true; " +
+                    "iptables -D INPUT -p tcp --dport $port -m comment --comment WDTT_HY2_MANAGED -j ACCEPT 2>/dev/null || true; " +
+                    "iptables -D INPUT -p tcp --dport 22 -m comment --comment WDTT_HY2_MANAGED -j ACCEPT 2>/dev/null || true; " +
+                    "iptables -D FORWARD -i wdtthy0 -m comment --comment WDTT_HY2_MANAGED -j ACCEPT 2>/dev/null || true; " +
+                    "iptables -D FORWARD -o wdtthy0 -m comment --comment WDTT_HY2_MANAGED -j ACCEPT 2>/dev/null || true; " +
                     "done; fi; " +
                     "if command -v nft >/dev/null 2>&1; then " +
                     "nft delete table ip wdtt 2>/dev/null || true; " +
@@ -1556,15 +1556,15 @@ private suspend fun performUninstall(
         onProgress(0.75f, "Удаление WDTT-интерфейса...")
         ssh.exec(
             rootCommand(
-                "ip link show wdtt0 >/dev/null 2>&1 && ip link del wdtt0 2>/dev/null || true; " +
-                    "[ -d /etc/wdtt ] && find /etc/wdtt -mindepth 1 -maxdepth 1 ! -name passwords.json -exec rm -rf {} + 2>/dev/null || true; " +
-                    "[ -f /etc/wdtt/passwords.json ] && chmod 600 /etc/wdtt/passwords.json 2>/dev/null || true"
+                "ip link show wdtthy0 >/dev/null 2>&1 && ip link del wdtthy0 2>/dev/null || true; " +
+                    "[ -d /etc/wdtt-hy2 ] && find /etc/wdtt-hy2 -mindepth 1 -maxdepth 1 ! -name passwords.json -exec rm -rf {} + 2>/dev/null || true; " +
+                    "[ -f /etc/wdtt-hy2/passwords.json ] && chmod 600 /etc/wdtt-hy2/passwords.json 2>/dev/null || true"
             ),
             timeout = 10000L
         )
 
         onProgress(0.90f, "Очистка sysctl...")
-        ssh.exec(rootCommand("rm -f /etc/sysctl.d/99-wdtt.conf; sysctl --system >/dev/null 2>&1 || true"), timeout = 15000L)
+        ssh.exec(rootCommand("rm -f /etc/sysctl.d/99-wdtt-hy2.conf; sysctl --system >/dev/null 2>&1 || true"), timeout = 15000L)
 
         onProgress(1.0f, "Готово!")
         DeployManager.stopDeploy("success")
@@ -1599,8 +1599,8 @@ fun DeploySecretsDialog(
     var adminIdInput by rememberSaveable { mutableStateOf(initialAdminId) }
     var botTokenInput by rememberSaveable { mutableStateOf(initialBotToken) }
     var sshPortInput by rememberSaveable { mutableStateOf(if (initialSshPort.isBlank()) "22" else initialSshPort) }
-    var dtlsPortInput by rememberSaveable { mutableStateOf(initialServerDtlsPort.ifBlank { "56000" }) }
-    var wgPortInput by rememberSaveable { mutableStateOf(initialServerWgPort.ifBlank { "56001" }) }
+    var dtlsPortInput by rememberSaveable { mutableStateOf(initialServerDtlsPort.ifBlank { "56100" }) }
+    var wgPortInput by rememberSaveable { mutableStateOf(initialServerWgPort.ifBlank { "56101" }) }
 
     fun normalizePort(value: String, fallback: String): String {
         return value.toIntOrNull()?.takeIf { it in 1..65535 }?.toString() ?: fallback
@@ -1701,7 +1701,7 @@ fun DeploySecretsDialog(
                         value = dtlsPortInput,
                         onValueChange = { dtlsPortInput = it.filter(Char::isDigit).take(5) },
                         label = { Text("Порт DTLS сервера") },
-                        placeholder = { Text("56000") },
+                        placeholder = { Text("56100") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(16.dp),
@@ -1714,7 +1714,7 @@ fun DeploySecretsDialog(
                         value = wgPortInput,
                         onValueChange = { wgPortInput = it.filter(Char::isDigit).take(5) },
                         label = { Text("Порт WireGuard сервера") },
-                        placeholder = { Text("56001") },
+                        placeholder = { Text("56101") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(16.dp),
@@ -1728,8 +1728,8 @@ fun DeploySecretsDialog(
                 Button(
                     onClick = {
                         val finalPort = if (sshPortInput.isBlank()) "22" else sshPortInput
-                        val finalDtls = normalizePort(dtlsPortInput, "56000")
-                        val finalWg = normalizePort(wgPortInput, "56001")
+                        val finalDtls = normalizePort(dtlsPortInput, "56100")
+                        val finalWg = normalizePort(wgPortInput, "56101")
                         scope.launch {
                             settingsStore.saveDeploySecrets(passInput, adminIdInput, botTokenInput, finalPort)
                             settingsStore.savePorts(finalDtls.toInt(), finalWg.toInt(), settingsStore.listenPort.first())

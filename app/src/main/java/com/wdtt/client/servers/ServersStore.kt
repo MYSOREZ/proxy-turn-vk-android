@@ -40,8 +40,8 @@ data class ManagedServer(
     val adminPassword: String,
     val adminApiToken: String = "",
     val adminCertPin: String = "",
-    val dtlsPort: Int = 56000,
-    val wgPort: Int = 56001,
+    val dtlsPort: Int = 56100,
+    val wgPort: Int = 56101,
     val manualPortsEnabled: Boolean = false,
 )
 
@@ -114,8 +114,8 @@ class ServersStore(context: Context) {
             adminPassword = secureStore.decrypt(prefs[adminPasswordEncKey(id)]) ?: "",
             adminApiToken = secureStore.decrypt(prefs[adminApiTokenEncKey(id)]) ?: "",
             adminCertPin = prefs[adminCertPinKey(id)] ?: "",
-            dtlsPort = prefs[dtlsPortKey(id)] ?: 56000,
-            wgPort = prefs[wgPortKey(id)] ?: 56001,
+            dtlsPort = prefs[dtlsPortKey(id)] ?: 56100,
+            wgPort = prefs[wgPortKey(id)] ?: 56101,
             manualPortsEnabled = prefs[manualPortsKey(id)] ?: false,
         )
     }

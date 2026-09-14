@@ -88,13 +88,13 @@ class TunnelService : Service() {
                                 ?: store.connectionMode.first()
                         )
                         val isRawTun = connectionMode == SettingsStore.CONNECTION_MODE_RAWTUN
-                        val serverDtlsPort = if (manualPortsEnabled) store.serverDtlsPort.first() else 56000
+                        val serverDtlsPort = if (manualPortsEnabled) store.serverDtlsPort.first() else 56100
                         // Raw и так всегда без DTLS (инвариант архитектуры, не опция) — если этот
                         // переключатель читать безусловно, сохранённое значение от классического
                         // VPN-режима "утекает" в rawtun: лишний -notls в cmd и лишняя плашка
                         // "[СЕТЬ] Транспорт: без DTLS" на экране логов при активном Raw.
                         val noDtlsEnabled = !isRawTun && store.noDtlsEnabled.first()
-                        val serverDirectPort = if (manualPortsEnabled) store.serverDirectPort.first() else 56002
+                        val serverDirectPort = if (manualPortsEnabled) store.serverDirectPort.first() else 56102
                         val serverRawPort = if (manualPortsEnabled) store.serverRawPort.first() else 56003
                         val effectiveServerPort = when {
                             isRawTun -> serverRawPort
@@ -200,9 +200,9 @@ class TunnelService : Service() {
                 val manualPortsEnabled = store.manualPortsEnabled.first()
                 val connectionModeRestore = SettingsStore.normalizeConnectionMode(store.connectionMode.first())
                 val isRawTunRestore = connectionModeRestore == SettingsStore.CONNECTION_MODE_RAWTUN
-                val serverDtlsPort = if (manualPortsEnabled) store.serverDtlsPort.first() else 56000
+                val serverDtlsPort = if (manualPortsEnabled) store.serverDtlsPort.first() else 56100
                 val noDtlsEnabled = !isRawTunRestore && store.noDtlsEnabled.first()
-                val serverDirectPort = if (manualPortsEnabled) store.serverDirectPort.first() else 56002
+                val serverDirectPort = if (manualPortsEnabled) store.serverDirectPort.first() else 56102
                 val serverRawPort = if (manualPortsEnabled) store.serverRawPort.first() else 56003
                 val effectiveServerPort = when {
                     isRawTunRestore -> serverRawPort

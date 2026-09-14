@@ -481,7 +481,7 @@ class ProfilesStore(context: Context) {
             p.vkHashes
         }
         val manualPorts = settings.manualPortsEnabled.first()
-        val serverDtlsPort = if (manualPorts) settings.serverDtlsPort.first() else 56000
+        val serverDtlsPort = if (manualPorts) settings.serverDtlsPort.first() else 56100
         val peerWithPort = PeerAddress.ensurePort(p.peer, serverDtlsPort)
         settings.save(peerWithPort, finalHashes, "", p.workersPerHash, "udp", p.listenPort)
         settings.saveConnectionPassword(p.password)
