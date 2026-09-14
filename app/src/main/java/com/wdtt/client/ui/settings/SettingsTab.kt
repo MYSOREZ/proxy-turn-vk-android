@@ -177,8 +177,8 @@ fun SettingsTabContent(
     var socksUsernameInput by rememberSaveable { mutableStateOf("") }
     var socksPasswordInput by rememberSaveable { mutableStateOf("") }
     val turnTcpEnabled by settingsStore.turnTcpEnabled.collectAsStateWithLifecycle(initialValue = true)
-    val serverRawPort by settingsStore.serverRawPort.collectAsStateWithLifecycle(initialValue = 56003)
-    var serverRawPortInput by rememberSaveable { mutableStateOf("56003") }
+    val serverRawPort by settingsStore.serverRawPort.collectAsStateWithLifecycle(initialValue = 56103)
+    var serverRawPortInput by rememberSaveable { mutableStateOf("56103") }
     LaunchedEffect(serverRawPort) {
         serverRawPortInput = serverRawPort.toString()
     }

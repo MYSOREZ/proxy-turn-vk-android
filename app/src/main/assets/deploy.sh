@@ -18,8 +18,14 @@ readonly SSH_PORT="${WDTT_SSH_PORT:-22}"
 readonly ADMIN_PORT="${WDTT_ADMIN_PORT:-56102}"
 # Пусто = выключено. Экспериментальный порт для клиентов без DTLS (RTP-obfs AEAD напрямую).
 readonly DIRECT_PORT="${WDTT_DIRECT_PORT:-}"
-# Пусто = выключено. Экспериментальный порт для raw-IP клиентов без WireGuard (свой TUN/NAT).
-readonly RAW_PORT="${WDTT_RAW_PORT:-}"
+# Raw-IP путь (свой TUN/NAT без WireGuard) в сборке HY2 НЕ используется и
+# серверу не передаётся, что бы ни прислало приложение:
+#   1. он уходит в сеть мимо -forward, то есть мимо Hysteria2;
+#   2. имя интерфейса (wdttraw0), подсеть 10.70.66.0/16, метка iptables
+#      WDTT_RAW_MANAGED и таблица nft wdttraw у него захардкожены и общие с
+#      оригинальным qWDTT — второй экземпляр снёс бы интерфейс и NAT первого.
+readonly RAW_PORT_REQUESTED="${WDTT_RAW_PORT:-}"
+readonly RAW_PORT=""
 readonly ADMIN_ID="${WDTT_ADMIN_ID:-}"
 readonly DNS_SERVERS="${WDTT_DNS_SERVERS:-1.1.1.1,1.0.0.1}"
 readonly WDTT_IFACE="wdtthy0"
@@ -592,16 +598,19 @@ start_wdtt() {
         return 0
     fi
 
-    # Сверяем, что на сервер приехал бинарник ИМЕННО этой сборки: без флага
-    # -forward он не умеет отдавать трафик в Hysteria2 и будет падать на
-    # старте, а причина из systemd-лога неочевидна.
+    # Сверяем, что на сервер приехал бинарник ИМЕННО этой сборки. Проверка
+    # ТОЛЬКО информационная: запуск с -h в чужом окружении может не дать
+    # вывода по причинам, не связанным с бинарником, и раньше такой ложный
+    # отказ обрывал установку до настоящей диагностики.
     echo "   Бинарник: $(sha256sum /usr/local/bin/wdtt-hy2-server 2>/dev/null | cut -c1-12), $(stat -c%s /usr/local/bin/wdtt-hy2-server 2>/dev/null) байт"
-    if ! /usr/local/bin/wdtt-hy2-server -h 2>&1 | grep -q -- "-forward"; then
-        echo "❌ Установленный бинарник НЕ поддерживает -forward."
-        echo "   Значит, на телефоне стоит старая сборка приложения."
-        echo "   Обновите APK (qWDTT-HY2) и повторите установку."
-        echo "WDTT_DEPLOY_SERVICE_FAILED"
-        return 0
+    local help_out=""
+    help_out="$(/usr/local/bin/wdtt-hy2-server -h 2>&1 | head -c 4000)" || true
+    if printf '%s' "$help_out" | grep -q -- "-forward"; then
+        echo "   Флаг -forward поддерживается: ок"
+    else
+        echo "⚠ Не удалось подтвердить поддержку -forward (запуск не блокирую)."
+        echo "   Код возврата -h: $?, символов вывода: ${#help_out}"
+        printf '%s\n' "$help_out" | head -12 | sed 's/^/   >> -h: /'
     fi
 
     systemctl restart wdtt-hy2
@@ -624,14 +633,28 @@ start_wdtt() {
         echo "   SSH:  порт ${SSH_PORT}"
     else
         echo "⚠️ Сервис wdtt не запустился. Статус: $status"
+        systemctl show wdtt-hy2 -p Result -p ExecMainCode -p ExecMainStatus 2>/dev/null \
+            | sed 's/^/   >> /'
         echo "   Последние логи сервиса:"
-        journalctl -u wdtt-hy2 -n 25 --no-pager -o cat 2>/dev/null | sed 's/^/   >> /'
-        echo "   Прямой запуск (перехват ошибки):"
-        timeout 6 /usr/local/bin/wdtt-hy2-server \
-            -listen "0.0.0.0:${DTLS_PORT}" -forward "127.0.0.1:${HY2_PORT}" \
-            -wg-iface "${WDTT_IFACE}" -wg-port "${WG_PORT}" \
-            -config-dir "${WDTT_CONFIG_DIR}" -password-file "${WDTT_CONFIG_DIR}/main.password" \
-            -dns "${DNS_SERVERS}" 2>&1 | tail -15 | sed 's/^/   >> /'
+        journalctl -u wdtt-hy2 -n 40 --no-pager -o cat 2>/dev/null | sed 's/^/   >> /'
+
+        # Запускаем ТЕМИ ЖЕ аргументами, что в юните: реконструкция «примерно
+        # такой же» командой скрывала бы ошибки в admin API / боте, которых в
+        # укороченном наборе флагов просто нет.
+        local unit_exec=""
+        unit_exec="$(sed -n 's/^ExecStart=//p' /etc/systemd/system/wdtt-hy2.service 2>/dev/null | head -1)"
+        if [ -n "$unit_exec" ]; then
+            echo "   Прямой запуск с аргументами юнита:"
+            echo "   >> $unit_exec"
+            timeout 6 bash -c "$unit_exec" 2>&1 | tail -25 | sed 's/^/   >> /'
+            echo "   >> (код возврата: $?)"
+        fi
+
+        echo "   Занятые порты:"
+        (ss -lunp 2>/dev/null || netstat -lunp 2>/dev/null) \
+            | grep -E ":(${DTLS_PORT}|${WG_PORT}|${HY2_PORT})[[:space:]]" | sed 's/^/   >> /'
+        echo "   Файлы ${WDTT_CONFIG_DIR}:"
+        ls -la "${WDTT_CONFIG_DIR}" 2>/dev/null | sed 's/^/   >> /'
         echo "   Состояние Hysteria2: $(systemctl is-active hysteria-hy2 2>/dev/null || echo unknown)"
         journalctl -u hysteria-hy2 -n 10 --no-pager -o cat 2>/dev/null | sed 's/^/   >> HY2: /'
         echo "WDTT_DEPLOY_SERVICE_FAILED"
@@ -803,7 +826,9 @@ main() {
     validate_port "WDTT_ADMIN_PORT" "$ADMIN_PORT"
     validate_port "WDTT_HY2_PORT" "$HY2_PORT"
     [ -n "$DIRECT_PORT" ] && validate_port "WDTT_DIRECT_PORT" "$DIRECT_PORT"
-    [ -n "$RAW_PORT" ] && validate_port "WDTT_RAW_PORT" "$RAW_PORT"
+    if [ -n "$RAW_PORT_REQUESTED" ]; then
+        echo "ℹ Raw-IP порт ${RAW_PORT_REQUESTED} проигнорирован: в сборке HY2 этот путь отключён"
+    fi
     validate_admin_id
     validate_dns_servers
 

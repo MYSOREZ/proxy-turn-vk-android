@@ -95,7 +95,7 @@ class TunnelService : Service() {
                         // "[СЕТЬ] Транспорт: без DTLS" на экране логов при активном Raw.
                         val noDtlsEnabled = !isRawTun && store.noDtlsEnabled.first()
                         val serverDirectPort = if (manualPortsEnabled) store.serverDirectPort.first() else 56102
-                        val serverRawPort = if (manualPortsEnabled) store.serverRawPort.first() else 56003
+                        val serverRawPort = if (manualPortsEnabled) store.serverRawPort.first() else 56103
                         val effectiveServerPort = when {
                             isRawTun -> serverRawPort
                             noDtlsEnabled -> serverDirectPort
@@ -203,7 +203,7 @@ class TunnelService : Service() {
                 val serverDtlsPort = if (manualPortsEnabled) store.serverDtlsPort.first() else 56100
                 val noDtlsEnabled = !isRawTunRestore && store.noDtlsEnabled.first()
                 val serverDirectPort = if (manualPortsEnabled) store.serverDirectPort.first() else 56102
-                val serverRawPort = if (manualPortsEnabled) store.serverRawPort.first() else 56003
+                val serverRawPort = if (manualPortsEnabled) store.serverRawPort.first() else 56103
                 val effectiveServerPort = when {
                     isRawTunRestore -> serverRawPort
                     noDtlsEnabled -> serverDirectPort

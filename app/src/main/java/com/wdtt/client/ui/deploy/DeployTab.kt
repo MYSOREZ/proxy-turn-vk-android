@@ -123,7 +123,7 @@ fun DeployScreen(initialServerId: String?, onBack: () -> Unit) {
     val flowServerDtlsPort by settingsStore.serverDtlsPort.collectAsStateWithLifecycle(initialValue = 56100)
     val flowServerWgPort by settingsStore.serverWgPort.collectAsStateWithLifecycle(initialValue = 56101)
     val savedServerDirectPort by settingsStore.serverDirectPort.collectAsStateWithLifecycle(initialValue = 56102)
-    val savedServerRawPort by settingsStore.serverRawPort.collectAsStateWithLifecycle(initialValue = 56003)
+    val savedServerRawPort by settingsStore.serverRawPort.collectAsStateWithLifecycle(initialValue = 56103)
 
     // Локальный (не Flow) state для полей "секретов" формы — как ip/login/
     // password выше. Раньше currentFormAsServer/автосохранение читали эти
