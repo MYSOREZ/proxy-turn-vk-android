@@ -489,9 +489,10 @@ func main() {
 			UpMbps:     *hy2Up,
 			DownMbps:   *hy2Down,
 		}
+		hyHolder := &hyClientHolder{}
 		go func() {
 			for ctx.Err() == nil {
-				if err := runHysteriaSocks(ctx, hyParams, *socksAddr, *socksAuth, *socksUser, *socksPass); err != nil {
+				if err := runHysteriaSocks(ctx, hyParams, *socksAddr, *socksAuth, *socksUser, *socksPass, hyHolder); err != nil {
 					log.Printf("[HY2] %v — повтор через 3с", err)
 				}
 				select {
@@ -501,6 +502,26 @@ func main() {
 				}
 			}
 		}()
+
+		// Системный VPN: Android передаёт сюда TUN-дескриптор, и весь трафик
+		// устройства идёт в ту же сессию Hysteria2 (см. hytun.go). Без него
+		// режим оставался локальным SOCKS5 — внешний IP не менялся, потому
+		// что про этот прокси никто, кроме самого приложения, не знает.
+		if *tunFdSock != "" {
+			go func() {
+				// Маркер Android ждёт, чтобы поднять VpnService: раньше
+				// поднимать нечего, а позже — незачем, unix-сокет уже слушает.
+				log.Println(hyTunReadyMarker(hyTunDNS))
+				tunFile, err := recvTunFD(*tunFdSock)
+				if err != nil {
+					log.Printf("[HY2TUN] TUN-дескриптор не получен: %v", err)
+					return
+				}
+				if err := runHysteriaTun(ctx, tunFile, hyHolder); err != nil {
+					log.Printf("[HY2TUN] %v", err)
+				}
+			}()
+		}
 	}
 
 	var wg sync.WaitGroup

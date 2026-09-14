@@ -563,6 +563,12 @@ object TunnelManager {
                         cmd.add(socks)
                         cmd.add("-hy2-pass")
                         cmd.add(params.connectionPassword)
+                        // Системный VPN: тот же механизм передачи TUN-fd, что и
+                        // у raw-режима. go_client поднимет поверх дескриптора
+                        // netstack и уведёт весь трафик устройства в Hysteria2.
+                        rawTunSockName = TunFdBridge.newSocketName()
+                        cmd.add("-tun-fd-sock")
+                        cmd.add(TunFdBridge.goSockPath(rawTunSockName))
                         if (params.socksAuthEnabled) {
                             cmd.add("-socks-auth")
                             cmd.add("-socks-user")
@@ -571,7 +577,7 @@ object TunnelManager {
                             cmd.add(params.socksPassword)
                         }
                         val authLabel = if (params.socksAuthEnabled) ", с авторизацией" else ""
-                        updateLog("conn_mode", "[СЕТЬ] Режим: Hysteria2 → SOCKS5 ($socks$authLabel), без VPN", 1, false)
+                        updateLog("conn_mode", "[СЕТЬ] Режим: Hysteria2 (VPN на всё устройство; SOCKS5 $socks$authLabel)", 1, false)
                     }
                 }
 
@@ -712,7 +718,7 @@ object TunnelManager {
      * stopService), так что runBlocking здесь не создаёт заметной задержки.
      */
     private fun stopRawTunIfNeeded() {
-        if (currentParams?.isRawTunMode != true) return
+        if (currentParams?.usesTunFdService != true) return
         val ctx = lastContext?.get() ?: return
         runBlocking { runCatching { RawTunEngine.stop(ctx) } }
     }
@@ -1174,6 +1180,30 @@ object TunnelManager {
                             }
                         }
                         return@forEachLine
+                    } else if (lineTrim.contains("[HY2TUN] ГОТОВ|")) {
+                        // go_client уже слушает unix-сокет и ждёт TUN-дескриптор.
+                        // Формат: [HY2TUN] ГОТОВ|<ip>|<dns через запятую>|<mtu>
+                        val fields = lineTrim.substringAfter("ГОТОВ|").split("|")
+                        val ip = fields.getOrNull(0)?.trim().orEmpty()
+                        val dnsCsv = fields.getOrNull(1)?.trim().orEmpty()
+                        val mtu = fields.getOrNull(2)?.trim()?.toIntOrNull() ?: 1400
+                        val hyCtx = lastContext?.get()
+                        if (ip.isEmpty() || hyCtx == null) {
+                            updateLog("hytun_conf_error", "[HY2] Не удалось поднять VPN: нет параметров интерфейса", 99, true)
+                        } else {
+                            scope.launch(Dispatchers.Main) {
+                                try {
+                                    RawTunEngine.start(hyCtx, ip, dnsCsv, mtu, rawTunSockName)
+                                    updateLog("hytun_ready", "[HY2] VPN поднят: весь трафик устройства идёт через Hysteria2", 2, false)
+                                    stats.value = "HY2 $ip"
+                                } catch (e: Exception) {
+                                    val msg = "Ошибка запуска VPN для HY2: ${e.readableMessage()}"
+                                    updateLog("hytun_start_error", msg, 99, true)
+                                    lastFatalError.value = msg
+                                }
+                            }
+                        }
+                        return@forEachLine
                     } else if (lineTrim.contains("[SOCKS] listening")) {
                         val isRaw = currentParams?.isRawTunMode == true
                         updateLog(
@@ -1434,7 +1464,7 @@ object TunnelManager {
                     preservedWireGuardConfig = null
                     withContext(Dispatchers.IO) {
                         ensureTransportStopped(params.port)
-                        if (params.isRawTunMode) {
+                        if (params.usesTunFdService) {
                             if (preserveVpn) {
                                 RawTunEngine.prepareForTransportRestart()
                             } else {
@@ -1461,7 +1491,7 @@ object TunnelManager {
                     start(context, params, isSwitching = true)
                     startJob?.join()
                     if (currentParams == null || process == null) return@withLock
-                    if (params.isRawTunMode) {
+                    if (params.usesTunFdService) {
                         awaitRawTunReady()
                     } else if (!params.isSocksMode) {
                         awaitWireGuardReady()
@@ -1670,7 +1700,7 @@ object TunnelManager {
         currentParams = null
         stopJob = scope.launch(Dispatchers.IO) {
             runCatching { stopGoProcessGracefully() }
-            if (paramsSnapshot?.isRawTunMode == true) {
+            if (paramsSnapshot?.usesTunFdService == true) {
                 val ctx = lastContext?.get()
                 if (ctx != null) {
                     runCatching { RawTunEngine.stop(ctx) }
@@ -2212,6 +2242,19 @@ data class TunnelParams(
     /** rawtun: сырые IP-пакеты напрямую в go_client через TUN-fd, без WireGuard вообще (ни Android, ни userspace). */
     val isRawTunMode: Boolean
         get() = SettingsStore.normalizeConnectionMode(connectionMode) == SettingsStore.CONNECTION_MODE_RAWTUN
+
+    /** Сборка HY2: третий режим — Hysteria2 (QUIC внутри TURN-туннеля). */
+    val isHysteriaMode: Boolean
+        get() = SettingsStore.normalizeConnectionMode(connectionMode) == SettingsStore.CONNECTION_MODE_SOCKS
+
+    /**
+     * Режимы, где системный TUN поднимает RawTunVpnService, а дескриптор
+     * уезжает в go_client через TunFdBridge. HY2 попал сюда вместе с raw:
+     * без системного VPN он отдавал только локальный SOCKS5, о котором никто,
+     * кроме самого приложения, не знает — внешний IP не менялся.
+     */
+    val usesTunFdService: Boolean
+        get() = isRawTunMode || isHysteriaMode
 
     val socksListenAddress: String
         get() = SettingsStore.socksListenAddress(socksPort)

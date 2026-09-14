@@ -536,10 +536,10 @@ fun SettingsTabContent(
             }
             startTunnelService()
         }
-        if (connectionMode == SettingsStore.CONNECTION_MODE_SOCKS) {
-            proceed()
-            return
-        }
+        // Раньше третий режим (SOCKS5) шёл в обход запроса VPN-разрешения:
+        // системный туннель он не поднимал. В сборке HY2 поднимает — значит
+        // разрешение нужно и ему, иначе VpnService.Builder.establish() вернёт
+        // null и трафик устройства останется вне туннеля.
         val activity = context as? com.wdtt.client.MainActivity
         if (activity != null) {
             activity.prepareVpnThen(proceed)

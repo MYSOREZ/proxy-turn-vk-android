@@ -197,13 +197,20 @@ func hysteriaDial(c hyclient.Client) func(ctx context.Context, network, addr str
 
 // runHysteriaSocks поднимает локальный SOCKS5, который ходит наружу через
 // Hysteria2. Возвращается, когда ctx отменён.
-func runHysteriaSocks(ctx context.Context, p HysteriaParams, socksAddr string, authEnabled bool, username, password string) error {
+func runHysteriaSocks(ctx context.Context, p HysteriaParams, socksAddr string, authEnabled bool, username, password string, holder *hyClientHolder) error {
 	c, err := newHysteriaClient(p)
 	if err != nil {
 		return err
 	}
 	defer c.Close()
 	context.AfterFunc(ctx, func() { _ = c.Close() })
+
+	// Тот же клиент обслуживает и системный VPN (см. hytun.go): сессия одна,
+	// незачем держать вторую.
+	if holder != nil {
+		holder.set(c)
+		defer holder.set(nil)
+	}
 
 	conf := &socks5.Config{
 		Dial:     hysteriaDial(c),
