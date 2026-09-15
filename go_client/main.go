@@ -154,6 +154,10 @@ func main() {
 				drainCaptchaResult()
 				CaptchaResultChan <- result
 				log.Printf("[КАПЧА] Результат от Kotlin записан в канал")
+			case strings.HasPrefix(line, "NETTAG|"):
+				// Сеть сменилась, а ядро не перезапускали (так бывает при
+				// выключенном экране) — переключаем память на новую сеть.
+				retagAIState(strings.TrimPrefix(line, "NETTAG|"))
 			case strings.HasPrefix(line, "TURN_CREDS|"):
 				handleTurnCredsStdinLine(line)
 			}

@@ -440,6 +440,10 @@ class TunnelService : Service() {
     private fun noteUnderlyingNetworkChange() {
         val fingerprint = activeUnderlyingFingerprint()
         if (fingerprint.isEmpty()) return
+        // Память адаптивной маскировки разложена по сетям, а с погашенным
+        // экраном туннель при смене сети намеренно не перезапускается — тогда
+        // ядро само о новой сети не узнает и писало бы опыт соты в файл Wi‑Fi.
+        syncNetworkTag()
         if (lastUnderlyingFingerprint.isEmpty()) {
             lastUnderlyingFingerprint = fingerprint
             return
@@ -447,6 +451,15 @@ class TunnelService : Service() {
         if (fingerprint == lastUnderlyingFingerprint) return
         lastUnderlyingFingerprint = fingerprint
         handleNetworkChange()
+    }
+
+    /** Сообщает ядру метку текущей сети (повторы отсекаются в TunnelManager). */
+    private fun syncNetworkTag() {
+        if (!TunnelManager.running.value) return
+        TunnelManager.scope.launch {
+            val tag = runCatching { NetworkTag.current(applicationContext) }.getOrNull() ?: return@launch
+            TunnelManager.notifyNetworkTag(tag)
+        }
     }
 
     private fun checkWifiStopOnTransition() {

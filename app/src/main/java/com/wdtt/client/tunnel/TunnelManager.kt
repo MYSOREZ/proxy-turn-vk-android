@@ -546,8 +546,10 @@ object TunnelManager {
                     val aiStateDir = java.io.File(context.filesDir, "aiobfs")
                     cmd.add("-ai-state")
                     cmd.add(aiStateDir.absolutePath)
+                    val startTag = NetworkTag.current(context)
                     cmd.add("-ai-net-tag")
-                    cmd.add(NetworkTag.current(context))
+                    cmd.add(startTag)
+                    lastNetTag = startTag
                     updateLog(
                         "ai_obfs",
                         "[СЕТЬ] Маскировка: адаптивная (профили + онлайн-обучение), эксперимент",
@@ -1986,6 +1988,33 @@ object TunnelManager {
             proc.outputStream.write("TURN_CREDS|error:cancelled\n".toByteArray(Charsets.UTF_8))
             proc.outputStream.flush()
         } catch (_: Exception) {
+        }
+    }
+
+    /** Метка сети, о которой ядро уже знает — чтобы не слать одно и то же. */
+    private var lastNetTag: String? = null
+
+    /**
+     * Сообщает ядру, что телефон сменил сеть.
+     *
+     * Память адаптивной маскировки разложена по сетям, а туннель при смене
+     * сети с погашенным экраном намеренно не перезапускается — без этого
+     * сообщения статистика соты писалась бы в файл домашнего Wi-Fi.
+     */
+    fun notifyNetworkTag(tag: String) {
+        if (tag.isEmpty() || tag == "offline" || tag == lastNetTag) return
+        val proc = process
+        if (proc == null || !proc.isAlive) {
+            // Туннель не запущен: метка определится сама при следующем старте.
+            lastNetTag = null
+            return
+        }
+        try {
+            proc.outputStream.write("NETTAG|$tag\n".toByteArray(Charsets.UTF_8))
+            proc.outputStream.flush()
+            lastNetTag = tag
+        } catch (e: Exception) {
+            updateLog("nettag_write_err", "Не удалось сообщить о смене сети: ${e.message}", 200, true)
         }
     }
 

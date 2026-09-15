@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -34,10 +35,25 @@ const (
 )
 
 type aiStateStore struct {
+	// mu защищает путь и ссылку на шейпер владельца: метку сети может
+	// сменить stdin-команда прямо во время работы (см. retag).
+	mu   sync.Mutex
+	dir  string
+	tag  string
 	path string
+	// ownerShaper — шейпер той сессии, которая пишет файл. Нужен, чтобы при
+	// смене сети сохранить накопленное в СТАРЫЙ файл и подтянуть память
+	// новой сети в тот же живой шейпер.
+	ownerShaper *aiobfs.Shaper
 	// owner: состояние учит каждая сессия своим шейпером, а файл один.
 	// Пишет первая захватившая флаг — остальные только читают при старте.
 	owner atomic.Bool
+}
+
+func (s *aiStateStore) currentPath() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.path
 }
 
 var globalAIState *aiStateStore
@@ -54,7 +70,12 @@ func initAIState(dir, tag string) {
 		log.Printf("[AI-OBFS] Память выключена: не создать %s: %v", dir, err)
 		return
 	}
-	globalAIState = &aiStateStore{path: filepath.Join(dir, "aiobfs-"+sanitizeAITag(tag)+".json")}
+	safe := sanitizeAITag(tag)
+	globalAIState = &aiStateStore{
+		dir:  dir,
+		tag:  safe,
+		path: filepath.Join(dir, "aiobfs-"+safe+".json"),
+	}
 }
 
 // sanitizeAITag не даёт метке сети превратиться в путь: она приходит снаружи.
@@ -75,12 +96,13 @@ func (s *aiStateStore) restore(shaper *aiobfs.Shaper) {
 	if s == nil {
 		return
 	}
+	path := s.currentPath()
 	unlock := aiobfs.LockState()
-	data, err := os.ReadFile(s.path)
+	data, err := os.ReadFile(path)
 	unlock()
 	if err != nil {
 		if !os.IsNotExist(err) {
-			log.Printf("[AI-OBFS] Не прочитать память %s: %v", s.path, err)
+			log.Printf("[AI-OBFS] Не прочитать память %s: %v", path, err)
 		}
 		return
 	}
@@ -89,7 +111,7 @@ func (s *aiStateStore) restore(shaper *aiobfs.Shaper) {
 	case err != nil:
 		log.Printf("[AI-OBFS] Память повреждена, начинаю с нуля: %v", err)
 	case applied:
-		log.Printf("[AI-OBFS] Память восстановлена: %s", filepath.Base(s.path))
+		log.Printf("[AI-OBFS] Память восстановлена: %s", filepath.Base(path))
 	default:
 		log.Printf("[AI-OBFS] Память от другой версии профилей, начинаю с нуля")
 	}
@@ -110,24 +132,76 @@ func (s *aiStateStore) persist(shaper *aiobfs.Shaper) {
 	unlock := aiobfs.LockState()
 	defer unlock()
 
-	tmp := s.path + ".tmp"
+	path := s.currentPath()
+	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, aiStateFileMode); err != nil {
 		log.Printf("[AI-OBFS] Не записать память: %v", err)
 		return
 	}
-	if err := os.Rename(tmp, s.path); err != nil {
+	if err := os.Rename(tmp, path); err != nil {
 		log.Printf("[AI-OBFS] Не заменить файл памяти: %v", err)
 		_ = os.Remove(tmp)
 	}
 }
 
-// claimOwnership отдаёт право записи ровно одной сессии.
-func (s *aiStateStore) claimOwnership() bool {
-	return s != nil && s.owner.CompareAndSwap(false, true)
+// claimOwnership отдаёт право записи ровно одной сессии и запоминает её
+// шейпер: при смене сети менять память надо именно в нём.
+func (s *aiStateStore) claimOwnership(shaper *aiobfs.Shaper) bool {
+	if s == nil || !s.owner.CompareAndSwap(false, true) {
+		return false
+	}
+	s.mu.Lock()
+	s.ownerShaper = shaper
+	s.mu.Unlock()
+	return true
 }
 
 func (s *aiStateStore) releaseOwnership() {
-	if s != nil {
-		s.owner.Store(false)
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.ownerShaper = nil
+	s.mu.Unlock()
+	s.owner.Store(false)
+}
+
+// retag переключает память на другую сеть без перезапуска ядра.
+//
+// Зачем это отдельной командой. Обычно смена сети перезапускает ядро, и метка
+// приезжает флагом. Но при выключенном экране приложение НАМЕРЕННО не
+// перезапускает туннель из-за фоновых событий сети — и тогда опыт мобильной
+// сети писался бы в файл домашнего Wi-Fi, портя обе памяти.
+func retagAIState(tag string) {
+	s := globalAIState
+	if s == nil {
+		return
+	}
+	safe := sanitizeAITag(tag)
+
+	s.mu.Lock()
+	if safe == s.tag {
+		s.mu.Unlock()
+		return
+	}
+	shaper := s.ownerShaper
+	oldTag := s.tag
+	s.mu.Unlock()
+
+	// Сначала дописываем накопленное в файл СТАРОЙ сети.
+	if shaper != nil {
+		s.persist(shaper)
+	}
+
+	s.mu.Lock()
+	s.tag = safe
+	s.path = filepath.Join(s.dir, "aiobfs-"+safe+".json")
+	s.mu.Unlock()
+
+	log.Printf("[AI-OBFS] Сеть сменилась: %s -> %s, переключаю память", oldTag, safe)
+
+	// И подтягиваем память новой сети в тот же живой шейпер.
+	if shaper != nil {
+		s.restore(shaper)
 	}
 }

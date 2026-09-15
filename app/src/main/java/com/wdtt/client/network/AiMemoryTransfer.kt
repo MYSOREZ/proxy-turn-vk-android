@@ -130,6 +130,32 @@ object AiMemoryTransfer {
         }
     }
 
+    /** Сколько сетей затёрто. */
+    data class ClearResult(val cleared: Int)
+
+    /**
+     * Стирает выученное и возвращает обучение к нулю.
+     *
+     * [tag] = null — все сети сразу; иначе только одна. Файл удаляется
+     * целиком: ядро при следующем запуске не найдёт его и начнёт со
+     * случайных начальных весов, ровно как на свежей установке.
+     *
+     * Вызывать только при остановленном туннеле: живое ядро держит память в
+     * памяти процесса и через минуту запишет её обратно поверх удалённого.
+     */
+    fun clear(context: Context, tag: String? = null): ClearResult {
+        val files = memoryDir(context).listFiles()?.filter { file ->
+            val fileTag = tagOf(file.name) ?: return@filter false
+            tag == null || fileTag == tag
+        }.orEmpty()
+
+        var cleared = 0
+        for (file in files) {
+            if (runCatching { file.delete() }.getOrDefault(false)) cleared++
+        }
+        return ClearResult(cleared)
+    }
+
     /**
      * Имя сети становится именем файла, а файл приходит снаружи — значит
      * «../» и прочее в имени недопустимы.

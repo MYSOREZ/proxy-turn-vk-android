@@ -1,6 +1,7 @@
 package com.wdtt.client.ui
 
 import com.wdtt.client.AiMemoryTransfer
+import com.wdtt.client.NetworkTag
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -3771,8 +3772,12 @@ private fun AiMemoryControls(
     tunnelRunning: Boolean,
 ) {
     var knownNetworks by remember { mutableStateOf(emptyList<String>()) }
+    var currentTag by remember { mutableStateOf("") }
+    // null — диалога нет; иначе в нём лежит метка сети либо "" для «всё сразу».
+    var confirmClear by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(tunnelRunning) {
         knownNetworks = withContext(Dispatchers.IO) { AiMemoryTransfer.knownNetworks(context) }
+        currentTag = withContext(Dispatchers.IO) { NetworkTag.current(context) }
     }
 
     val importLauncher = rememberLauncherForActivityResult(
@@ -3834,11 +3839,76 @@ private fun AiMemoryControls(
             shape = RoundedCornerShape(14.dp),
         ) { Text("Импорт") }
     }
-    if (tunnelRunning) {
-        Text(
-            "Импорт — при остановленном туннеле: работающее ядро переписывает память раз в минуту.",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        OutlinedButton(
+            onClick = { confirmClear = currentTag },
+            enabled = !tunnelRunning && knownNetworks.contains(currentTag),
+            modifier = Modifier.weight(1f),
+            shape = RoundedCornerShape(14.dp),
+        ) { Text("Забыть сеть") }
+
+        OutlinedButton(
+            onClick = { confirmClear = "" },
+            enabled = !tunnelRunning && knownNetworks.isNotEmpty(),
+            modifier = Modifier.weight(1f),
+            shape = RoundedCornerShape(14.dp),
+        ) { Text("Забыть всё") }
+    }
+    Text(
+        if (tunnelRunning) {
+            "Импорт и очистка — при остановленном туннеле: работающее ядро держит память " +
+                "в себе и раз в минуту пишет её обратно поверх."
+        } else {
+            "Текущая сеть: ${currentTag.ifEmpty { "неизвестна" }}. «Забыть сеть» стирает " +
+                "выученное только для неё, остальные сети остаются."
+        },
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    val pendingTag = confirmClear
+    if (pendingTag != null) {
+        val whole = pendingTag.isEmpty()
+        AlertDialog(
+            onDismissRequest = { confirmClear = null },
+            title = { Text(if (whole) "Забыть всё выученное?" else "Забыть сеть $pendingTag?") },
+            text = {
+                Text(
+                    if (whole) {
+                        "Память всех ${knownNetworks.size} сетей будет удалена. Обучение " +
+                            "начнётся с нуля и снова наберёт форму за несколько сеансов. " +
+                            "Отменить это нельзя — если память нужна, сперва сделайте экспорт."
+                    } else {
+                        "Будет удалено выученное только для сети $pendingTag. Остальные " +
+                            "сети не затрагиваются. Отменить это нельзя."
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmClear = null
+                    scope.launch {
+                        val result = withContext(Dispatchers.IO) {
+                            AiMemoryTransfer.clear(context, if (whole) null else pendingTag)
+                        }
+                        knownNetworks = withContext(Dispatchers.IO) {
+                            AiMemoryTransfer.knownNetworks(context)
+                        }
+                        val message = if (result.cleared > 0) {
+                            "Память очищена: сетей ${result.cleared}"
+                        } else {
+                            "Очищать было нечего"
+                        }
+                        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                    }
+                }) { Text("Забыть") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmClear = null }) { Text("Отмена") }
+            },
         )
     }
 }

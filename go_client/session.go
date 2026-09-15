@@ -353,7 +353,7 @@ func RunSession(
 
 			// Запись памяти ведёт одна сессия: шейпер у каждой свой, а файл
 			// общий, и девять писателей просто затирали бы друг друга.
-			if globalAIState.claimOwnership() {
+			if globalAIState.claimOwnership(shaper) {
 				go func() {
 					ticker := time.NewTicker(aiStateSaveInterval)
 					defer ticker.Stop()
