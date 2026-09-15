@@ -3803,7 +3803,9 @@ private fun AiMemoryControls(
         if (knownNetworks.isEmpty()) {
             "Выученного пока нет: память появится после первого подключения с этой маскировкой."
         } else {
-            "Выучено сетей: ${knownNetworks.size} (${knownNetworks.joinToString(", ")})"
+            "Выучено сетей: ${knownNetworks.size} (${knownNetworks.joinToString(", ")}). " +
+                "Экспорт кладёт их все в один файл; на другом телефоне импорт разложит " +
+                "их обратно и подхватит ту, в которой он сейчас."
         },
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -3830,7 +3832,7 @@ private fun AiMemoryControls(
             enabled = knownNetworks.isNotEmpty(),
             modifier = Modifier.weight(1f),
             shape = RoundedCornerShape(14.dp),
-        ) { Text("Экспорт") }
+        ) { Text("Экспорт всех") }
 
         OutlinedButton(
             onClick = { importLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) },
