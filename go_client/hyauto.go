@@ -314,7 +314,7 @@ const (
 
 // runHysteriaSupervisor держит живую сессию Hysteria2 и, в режиме автоподбора,
 // пересоздаёт её под новую полосу. Возвращается по отмене ctx.
-func runHysteriaSupervisor(ctx context.Context, p HysteriaParams, holder *hyClientHolder, auto bool) {
+func runHysteriaSupervisor(ctx context.Context, p HysteriaParams, holder *hyClientHolder, auto bool, stats *Stats) {
 	ctrl := newBandwidthController()
 	if auto {
 		p.UpMbps = uint64(math.Round(ctrl.upMbps))
@@ -327,6 +327,14 @@ func runHysteriaSupervisor(ctx context.Context, p HysteriaParams, holder *hyClie
 		// новая не сможет получать ответы из туннеля (см. closeOldBeforeNew).
 		if old := holder.publish(nil); old != nil {
 			_ = old.Close()
+		}
+
+		// Ждём, пока туннель вообще жив. Поднимать QUIC, когда ни один
+		// воркер не подключён (телефон в дозе, сеть переключается), — значит
+		// гарантированно получить отказ и засорить лог строками
+		// "Сессия Hysteria2 не поднялась".
+		if !waitForTunnel(ctx, stats) {
+			return
 		}
 
 		c, err := newHysteriaClient(p)
@@ -441,4 +449,37 @@ func logHySpeed(upBps, downBps float64) {
 	}
 	log.Printf("[HY2] Скорость: ↓%.1f / ↑%.1f Мбит/с (пик ↓%.1f / ↑%.1f)",
 		downBps/1e6, upBps/1e6, hyPeakDownBps/1e6, hyPeakUpBps/1e6)
+}
+
+// waitForTunnel ждёт, пока появится хотя бы один живой воркер TURN.
+// Возвращает false, если ждать больше некому (ctx отменён).
+//
+// Сессия Hysteria2 живёт ВНУТРИ туннеля: пока туннеля нет, дозвониться
+// некуда. Раньше супервизор этого не знал и честно пытался каждые три
+// секунды — на каждый сон телефона получалась пачка отказов.
+func waitForTunnel(ctx context.Context, stats *Stats) bool {
+	if stats == nil || stats.ActiveConnections.Load() > 0 {
+		return ctx.Err() == nil
+	}
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	logged := false
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+		if stats.ActiveConnections.Load() > 0 {
+			if logged {
+				log.Printf("[HY2] Туннель снова на связи, поднимаю сессию")
+			}
+			return true
+		}
+		if !logged {
+			log.Printf("[HY2] Жду восстановления туннеля, сессию пока не поднимаю")
+			logged = true
+		}
+	}
 }

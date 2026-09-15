@@ -879,8 +879,15 @@ object TunnelManager {
                     // подключиться"), пока сам туннель работает: держать её как
                     // ошибку значит зажигать красный значок и выдавать подсказку
                     // "сервер не отвечает" на каждый недоступный сайт.
+                    // "connection closed" — это оборванная сессия Hysteria2,
+                    // её поднимет супервизор; "не смогла подключиться" — отказ
+                    // выходной ноды. Ни то, ни другое не означает, что VPS
+                    // недоступен, а общий разборщик выдавал именно такую
+                    // подсказку, потому что видел в строке слово timeout.
                     if (lineTrim.contains("[HY2TUN]") &&
-                        (lineTrim.contains("не смогла подключиться") || lineTrim.contains("dial error"))
+                        (lineTrim.contains("не смогла подключиться") ||
+                            lineTrim.contains("dial error") ||
+                            lineTrim.contains("connection closed"))
                     ) {
                         updateLog(
                             "hytun_dial_fail",

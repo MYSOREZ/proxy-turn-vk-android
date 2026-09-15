@@ -500,7 +500,7 @@ func main() {
 		hyHolder := &hyClientHolder{}
 		// Супервизор держит сессию Hysteria2 и, при -hy2-auto, сам
 		// пересматривает полосу Brutal по замерам (см. hyauto.go).
-		go runHysteriaSupervisor(ctx, hyParams, hyHolder, *hy2Auto)
+		go runHysteriaSupervisor(ctx, hyParams, hyHolder, *hy2Auto, stats)
 		go func() {
 			for ctx.Err() == nil {
 				if err := runHysteriaSocks(ctx, *socksAddr, *socksAuth, *socksUser, *socksPass, hyHolder); err != nil {

@@ -189,6 +189,16 @@ func newHysteriaClient(p HysteriaParams) (hyclient.Client, error) {
 		ConnFactory: tunnelConnFactory{},
 		ServerAddr:  udpAddr,
 		Auth:        p.Auth,
+		// Терпимость к простою. По умолчанию QUIC разрывает сессию после 30
+		// секунд тишины, а телефон в дозе замолкает именно так: в логе это
+		// выглядело как "connection closed: timeout: no recent network
+		// activity" и пересоздание сессии после каждого короткого сна.
+		// 90 секунд переживают обычную дозу; столько же выставляет и сервер
+		// (quic.maxIdleTimeout в deploy.sh) — иначе он разорвёт первым.
+		QUICConfig: hyclient.QUICConfig{
+			MaxIdleTimeout:  90 * time.Second,
+			KeepAlivePeriod: 15 * time.Second,
+		},
 		TLSConfig: hyclient.TLSConfig{
 			ServerName:         p.SNI,
 			InsecureSkipVerify: p.Insecure,

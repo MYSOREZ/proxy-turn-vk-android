@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"math"
 	"testing"
 	"time"
@@ -298,5 +299,52 @@ func TestControllerCeilingGrowsWithSpeed(t *testing.T) {
 	}
 	if c.downMbps <= slow {
 		t.Fatalf("потолок не вырос вслед за скоростью: %.1f -> %.1f", slow, c.downMbps)
+	}
+}
+
+// Пока туннель не поднят, сессию Hysteria2 поднимать некуда: она живёт
+// ВНУТРИ туннеля. Раньше супервизор этого не знал и на каждый сон телефона
+// выдавал пачку отказов «Сессия не поднялась».
+func TestWaitsForTunnelBeforeDialing(t *testing.T) {
+	stats := NewStats()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan bool, 1)
+	go func() { done <- waitForTunnel(ctx, stats) }()
+
+	select {
+	case <-done:
+		t.Fatalf("супервизор не стал ждать туннель")
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	stats.ActiveConnections.Add(1)
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Fatalf("туннель поднялся, а ожидание вернуло отказ")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("ожидание не заметило, что туннель поднялся")
+	}
+}
+
+// Отмена не должна оставлять висящую горутину.
+func TestWaitForTunnelStopsOnCancel(t *testing.T) {
+	stats := NewStats()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan bool, 1)
+	go func() { done <- waitForTunnel(ctx, stats) }()
+	cancel()
+
+	select {
+	case ok := <-done:
+		if ok {
+			t.Fatalf("после отмены ожидание должно возвращать отказ")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("ожидание не завершилось после отмены")
 	}
 }
