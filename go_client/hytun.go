@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	hyclient "github.com/apernet/hysteria/core/v2/client"
+	hyerrs "github.com/apernet/hysteria/core/v2/errors"
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
@@ -214,7 +216,7 @@ func handleHyTCP(ctx context.Context, r *tcp.ForwarderRequest, holder *hyClientH
 	}
 	remote, err := c.TCP(target)
 	if err != nil {
-		log.Printf("[HY2TUN] TCP %s: %v", target, err)
+		logHyDialFailure("TCP", target, err)
 		r.Complete(true)
 		return
 	}
@@ -260,7 +262,7 @@ func handleHyUDP(ctx context.Context, r *udp.ForwarderRequest, holder *hyClientH
 
 	hyConn, err := c.UDP()
 	if err != nil {
-		log.Printf("[HY2TUN] UDP %s: %v", target, err)
+		logHyDialFailure("UDP", target, err)
 		local.Close()
 		return
 	}
@@ -308,6 +310,49 @@ func handleHyUDP(ctx context.Context, r *udp.ForwarderRequest, holder *hyClientH
 		<-ctx.Done()
 		closeBoth()
 	}()
+}
+
+// logHyDialFailure объясняет, ЧЬЯ это ошибка, и не даёт ей засорять лог.
+//
+// hysteria отдаёт DialError, когда до адреса не смогла достучаться выходная
+// нода: текст ошибки ("dial tcp4 …: i/o timeout") сформирован на VPS и просто
+// доставлен нам. Это не поломка туннеля и не повод для подсказки про
+// недоступный VPS — туннель в этот момент работает. Всё остальное (закрытая
+// сессия, локальный сбой) — уже наша сторона.
+//
+// Один и тот же адрес обычно отваливается пачкой попыток подряд, поэтому одна
+// строка на адрес в hyDialLogEvery.
+var (
+	hyDialLogMu   sync.Mutex
+	hyDialLogSeen = map[string]time.Time{}
+)
+
+const hyDialLogEvery = 30 * time.Second
+
+func logHyDialFailure(kind, target string, err error) {
+	hyDialLogMu.Lock()
+	last, ok := hyDialLogSeen[target]
+	if ok && time.Since(last) < hyDialLogEvery {
+		hyDialLogMu.Unlock()
+		return
+	}
+	hyDialLogSeen[target] = time.Now()
+	if len(hyDialLogSeen) > 256 {
+		for k, t := range hyDialLogSeen {
+			if time.Since(t) > hyDialLogEvery {
+				delete(hyDialLogSeen, k)
+			}
+		}
+	}
+	hyDialLogMu.Unlock()
+
+	var dialErr hyerrs.DialError
+	if errors.As(err, &dialErr) {
+		log.Printf("[HY2TUN] %s %s: выходная нода не смогла подключиться (%s). Туннель при этом работает.",
+			kind, target, dialErr.Message)
+		return
+	}
+	log.Printf("[HY2TUN] %s %s: %v", kind, target, err)
 }
 
 // addrString печатает адрес назначения так, как его ждёт Hysteria2 (строка

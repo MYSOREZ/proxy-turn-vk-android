@@ -22,8 +22,8 @@ android {
         applicationId = "net.qwdtt.hy2"
         minSdk = 28
         targetSdk = 35
-        versionCode = 49
-        versionName = "1.4.4-hy2.8"
+        versionCode = 50
+        versionName = "1.4.4-hy2.9"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

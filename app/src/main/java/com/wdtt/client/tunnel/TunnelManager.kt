@@ -824,6 +824,23 @@ object TunnelManager {
                         return@forEachLine
                     }
 
+                    // Отказ одного соединения в режиме HY2 — не ошибка туннеля.
+                    // Строку формирует выходная нода ("выходная нода не смогла
+                    // подключиться"), пока сам туннель работает: держать её как
+                    // ошибку значит зажигать красный значок и выдавать подсказку
+                    // "сервер не отвечает" на каждый недоступный сайт.
+                    if (lineTrim.contains("[HY2TUN]") &&
+                        (lineTrim.contains("не смогла подключиться") || lineTrim.contains("dial error"))
+                    ) {
+                        updateLog(
+                            "hytun_dial_fail",
+                            "[HY2] " + lineTrim.substringAfter("[HY2TUN]").trim(),
+                            50,
+                            false
+                        )
+                        return@forEachLine
+                    }
+
                     val isError = lineTrim.contains("Ошибка", true) || lineTrim.contains("error", true) || lineTrim.contains("FAIL", true) || lineTrim.contains("timeout", true) || lineTrim.contains("refused", true) || lineTrim.contains("FATAL_AUTH", true)
 
                     // 0. FATAL AUTH — мгновенная остановка (пароль / срок / устройство)
