@@ -2,4 +2,6 @@
 <paths>
     <cache-path name="apk_updates" path="updates/" />
     <cache-path name="logs" path="logs/" />
+    <!-- Экспорт памяти адаптивной маскировки (см. AiMemoryTransfer). -->
+    <cache-path name="ai_memory" path="ai-memory/" />
 </paths>

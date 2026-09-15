@@ -27,7 +27,7 @@ import (
 // старые веса относятся к другим рукам бандита. Несовпадение числа профилей
 // или версии = состояние молча игнорируется, обучение начинается с нуля.
 
-const stateVersion = 1
+const stateVersion = 2
 
 // State — сериализуемый слепок выученного.
 type State struct {
@@ -41,6 +41,9 @@ type State struct {
 	PolicyBOut  []float64   `json:"p_bout"`
 	PolicyBase  float64     `json:"p_base"`
 	BestTputBps float64     `json:"best_bps"`
+	// Knobs — обучаемые параметры внутри профилей (см. knobs.go). Появились
+	// в версии 2; файлы версии 1 читаются как прежде, просто без ручек.
+	Knobs [][]float64 `json:"knobs,omitempty"`
 }
 
 // ExportState отдаёт слепок выученного, пригодный для записи на диск.
@@ -56,6 +59,7 @@ func (s *Shaper) ExportState() ([]byte, error) {
 	}
 	s.bandit.exportInto(&st)
 	s.policy.exportInto(&st)
+	st.Knobs = s.knobs.export()
 
 	data, err := json.Marshal(st)
 	if err != nil {
@@ -75,7 +79,9 @@ func (s *Shaper) ImportState(data []byte) (applied bool, err error) {
 	if err := json.Unmarshal(data, &st); err != nil {
 		return false, fmt.Errorf("aiobfs: разбор состояния: %w", err)
 	}
-	if st.Version != stateVersion || st.NumProfiles != len(s.profiles) {
+	// Файл более старой версии принимаем: в нём просто нет части полей, а
+	// терять уже накопленные веса из-за добавления новой ручки — обидно.
+	if st.Version < 1 || st.Version > stateVersion || st.NumProfiles != len(s.profiles) {
 		return false, nil
 	}
 	if !s.bandit.importFrom(&st) {
@@ -83,6 +89,12 @@ func (s *Shaper) ImportState(data []byte) (applied bool, err error) {
 	}
 	if !s.policy.importFrom(&st) {
 		return false, nil
+	}
+
+	if len(st.Knobs) > 0 {
+		// Ручки восстанавливаем «как получится»: их отсутствие или иная
+		// форма не повод выбрасывать веса бандита и сети.
+		s.knobs.importFrom(st.Knobs)
 	}
 
 	s.learnMu.Lock()

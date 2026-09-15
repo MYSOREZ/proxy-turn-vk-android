@@ -76,13 +76,21 @@ type Profile struct {
 	// frame to frame), so independent-per-packet padding would itself be
 	// an unnatural, and therefore learnable, statistical signature.
 	PaddingMax int
+	// PaddingMaxLow — нижняя граница добивки для обучаемой ручки (см.
+	// knobs.go). Обучение двигает добивку между PaddingMaxLow и PaddingMax,
+	// то есть внутри того, что для этого вида трафика правдоподобно. Ноль =
+	// взять треть от PaddingMax.
+	PaddingMaxLow int
 
 	// DecoyProbability is the chance, per send, of also emitting a small
 	// keepalive-shaped decoy packet (silence/comfort-noise frames, RTCP
 	// receiver reports) that carries no tunnel payload — real WebRTC
 	// sessions produce exactly this kind of "empty" traffic.
 	DecoyProbability float64
-	DecoyBytesMean   int
+	// DecoyProbabilityLow — нижняя граница частоты ложных пакетов для
+	// обучаемой ручки. Ноль = треть от DecoyProbability.
+	DecoyProbabilityLow float64
+	DecoyBytesMean      int
 }
 
 // StandardProfiles returns the built-in disguise set. Order is fixed and
@@ -92,59 +100,69 @@ type Profile struct {
 func StandardProfiles() []Profile {
 	return []Profile{
 		{
-			Name:             "audio_opus",
-			PayloadTypes:     []uint8{96, 101, 105, 109, 111, 113, 120},
-			PacketBytesMean:  110,
-			PacketBytesStd:   40,
-			SendInterval:     20 * time.Millisecond,
-			IntervalJitter:   0.10,
-			PaddingMax:       48,
-			DecoyProbability: 0.05,
-			DecoyBytesMean:   24,
+			Name:                "audio_opus",
+			PayloadTypes:        []uint8{96, 101, 105, 109, 111, 113, 120},
+			PacketBytesMean:     110,
+			PacketBytesStd:      40,
+			SendInterval:        20 * time.Millisecond,
+			IntervalJitter:      0.10,
+			PaddingMax:          48,
+			PaddingMaxLow:       12,
+			DecoyProbability:    0.05,
+			DecoyProbabilityLow: 0.01,
+			DecoyBytesMean:      24,
 		},
 		{
-			Name:             "video_low_motion",
-			PayloadTypes:     []uint8{96, 98, 100, 102, 104, 106, 108},
-			PacketBytesMean:  350,
-			PacketBytesStd:   150,
-			SendInterval:     33 * time.Millisecond,
-			IntervalJitter:   0.20,
-			PaddingMax:       120,
-			DecoyProbability: 0.03,
-			DecoyBytesMean:   40,
+			Name:                "video_low_motion",
+			PayloadTypes:        []uint8{96, 98, 100, 102, 104, 106, 108},
+			PacketBytesMean:     350,
+			PacketBytesStd:      150,
+			SendInterval:        33 * time.Millisecond,
+			IntervalJitter:      0.20,
+			PaddingMax:          120,
+			PaddingMaxLow:       30,
+			DecoyProbability:    0.03,
+			DecoyProbabilityLow: 0.01,
+			DecoyBytesMean:      40,
 		},
 		{
-			Name:             "video_high_motion",
-			PayloadTypes:     []uint8{96, 98, 100, 102, 104, 106, 108},
-			PacketBytesMean:  900,
-			PacketBytesStd:   400,
-			SendInterval:     16 * time.Millisecond,
-			IntervalJitter:   0.25,
-			PaddingMax:       200,
-			DecoyProbability: 0.02,
-			DecoyBytesMean:   40,
+			Name:                "video_high_motion",
+			PayloadTypes:        []uint8{96, 98, 100, 102, 104, 106, 108},
+			PacketBytesMean:     900,
+			PacketBytesStd:      400,
+			SendInterval:        16 * time.Millisecond,
+			IntervalJitter:      0.25,
+			PaddingMax:          200,
+			PaddingMaxLow:       48,
+			DecoyProbability:    0.02,
+			DecoyProbabilityLow: 0.005,
+			DecoyBytesMean:      40,
 		},
 		{
-			Name:             "screen_share",
-			PayloadTypes:     []uint8{97, 99, 103, 107, 122, 126},
-			PacketBytesMean:  1100,
-			PacketBytesStd:   500,
-			SendInterval:     66 * time.Millisecond,
-			IntervalJitter:   0.35,
-			PaddingMax:       220,
-			DecoyProbability: 0.02,
-			DecoyBytesMean:   32,
+			Name:                "screen_share",
+			PayloadTypes:        []uint8{97, 99, 103, 107, 122, 126},
+			PacketBytesMean:     1100,
+			PacketBytesStd:      500,
+			SendInterval:        66 * time.Millisecond,
+			IntervalJitter:      0.35,
+			PaddingMax:          220,
+			PaddingMaxLow:       56,
+			DecoyProbability:    0.02,
+			DecoyProbabilityLow: 0.005,
+			DecoyBytesMean:      32,
 		},
 		{
-			Name:             "idle_keepalive",
-			PayloadTypes:     []uint8{13}, // RFC 3551 CN (comfort noise) — a real, well-known static PT
-			PacketBytesMean:  32,
-			PacketBytesStd:   10,
-			SendInterval:     200 * time.Millisecond,
-			IntervalJitter:   0.5,
-			PaddingMax:       24,
-			DecoyProbability: 0.15,
-			DecoyBytesMean:   20,
+			Name:                "idle_keepalive",
+			PayloadTypes:        []uint8{13}, // RFC 3551 CN (comfort noise) — a real, well-known static PT
+			PacketBytesMean:     32,
+			PacketBytesStd:      10,
+			SendInterval:        200 * time.Millisecond,
+			IntervalJitter:      0.5,
+			PaddingMax:          24,
+			PaddingMaxLow:       8,
+			DecoyProbability:    0.15,
+			DecoyProbabilityLow: 0.05,
+			DecoyBytesMean:      20,
 		},
 	}
 }

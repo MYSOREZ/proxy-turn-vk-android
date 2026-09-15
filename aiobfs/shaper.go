@@ -105,6 +105,8 @@ type Shaper struct {
 	bestThroughput float64
 	// throughputFn — источник фактической скорости для RunAutonomous.
 	throughputFn func() float64
+	// knobs — обучаемые параметры внутри профиля (см. knobs.go).
+	knobs *knobLearner
 
 	currentIdx int32 // atomic index into profiles
 
@@ -205,6 +207,7 @@ func New(cfg Config) (*Shaper, error) {
 		pendingProbe: make(map[uint32]time.Time),
 		pongQueue:    make(chan []byte, 8),
 	}
+	s.knobs = newKnobLearner(len(profiles), rng)
 	arm, _ := s.bandit.selectArm()
 	if cfg.InitialProfile != "" {
 		for i, p := range profiles {
@@ -249,7 +252,9 @@ func (s *Shaper) Wrap(payload []byte) ([]byte, error) {
 // it does not block or sleep.
 func (s *Shaper) MaybeDecoy() (wire []byte, ok bool, err error) {
 	profile := s.CurrentProfile()
-	if profile.DecoyProbability <= 0 || s.rng.float64() >= profile.DecoyProbability {
+	_, decoyKnob := s.knobs.current(int(atomic.LoadInt32(&s.currentIdx)))
+	decoyProb := effectiveDecoyProbability(profile, decoyKnob)
+	if decoyProb <= 0 || s.rng.float64() >= decoyProb {
 		return nil, false, nil
 	}
 	size := s.rng.normal(float64(profile.DecoyBytesMean), float64(profile.DecoyBytesMean)/4, 1)
@@ -307,9 +312,13 @@ func (s *Shaper) wrapInternal(marker byte, payload []byte) ([]byte, error) {
 	} else if s.padDrift > 1 {
 		s.padDrift = 1
 	}
+	// Верхняя граница добивки — не константа профиля, а обучаемая ручка
+	// внутри его рамок: прямой размен скорости и неотличимости (knobs.go).
+	paddingKnob, _ := s.knobs.current(int(atomic.LoadInt32(&s.currentIdx)))
+	padMax := effectivePaddingMax(profile, paddingKnob)
 	padNeeded := 0
-	if profile.PaddingMax > 0 {
-		padNeeded = int(s.padDrift * float64(profile.PaddingMax))
+	if padMax > 0 {
+		padNeeded = int(s.padDrift * float64(padMax))
 	}
 	s.writeMu.Unlock()
 
@@ -477,6 +486,9 @@ func (s *Shaper) Observe(rttMs, lossRate, throughputBps float64) bool {
 	if s.haveRound {
 		s.bandit.update(s.pendingArm, s.pendingProb, reward)
 		s.policy.train(s.pendingFeatures, s.pendingHidden, s.pendingProbs, s.pendingArm, reward)
+		// Ту же награду получают и ручки профиля, который её заработал:
+		// бандит учится ЧТО выбрать, ручки — КАКИМ оно должно быть.
+		s.knobs.observe(s.pendingArm, reward)
 	}
 
 	hidden, logits, probs := s.policy.forward(features)

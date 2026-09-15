@@ -1,5 +1,8 @@
 package com.wdtt.client.ui
 
+import com.wdtt.client.AiMemoryTransfer
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
@@ -1663,6 +1666,11 @@ fun SettingsTabContent(
                         }
                         AnimatedVisibility(visible = aiObfsEnabled) {
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                AiMemoryControls(
+                                    context = context,
+                                    scope = scope,
+                                    tunnelRunning = tunnelRunning,
+                                )
                                 OutlinedTextField(
                                     value = serverAiPortInput,
                                     onValueChange = { value ->
@@ -3744,4 +3752,93 @@ private fun GoDnsDropdownItem(
         onClick = onClick,
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
     )
+}
+
+/**
+ * Перенос выученного между устройствами.
+ *
+ * То, что один телефон выучил в сети конкретного оператора, годится другому
+ * телефону в той же сети: обучение идёт по обратной связи от канала, а канал
+ * у них общий.
+ *
+ * Импорт разрешён только при остановленном туннеле: работающее ядро
+ * переписывает файл памяти раз в минуту и просто затрёт принесённое.
+ */
+@Composable
+private fun AiMemoryControls(
+    context: android.content.Context,
+    scope: kotlinx.coroutines.CoroutineScope,
+    tunnelRunning: Boolean,
+) {
+    var knownNetworks by remember { mutableStateOf(emptyList<String>()) }
+    LaunchedEffect(tunnelRunning) {
+        knownNetworks = withContext(Dispatchers.IO) { AiMemoryTransfer.knownNetworks(context) }
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val text = context.contentResolver.openInputStream(uri)
+                        ?.bufferedReader()?.use { it.readText() }.orEmpty()
+                    AiMemoryTransfer.importBundle(context, text)
+                }.getOrElse { AiMemoryTransfer.ImportResult(0, it.message ?: "не прочитать файл") }
+            }
+            val message = result.error?.let { "Память не принята: $it" }
+                ?: "Память принята: сетей ${result.imported}"
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            knownNetworks = withContext(Dispatchers.IO) { AiMemoryTransfer.knownNetworks(context) }
+        }
+    }
+
+    Text(
+        if (knownNetworks.isEmpty()) {
+            "Выученного пока нет: память появится после первого подключения с этой маскировкой."
+        } else {
+            "Выучено сетей: ${knownNetworks.size} (${knownNetworks.joinToString(", ")})"
+        },
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        OutlinedButton(
+            onClick = {
+                scope.launch {
+                    val intent = withContext(Dispatchers.IO) {
+                        runCatching { AiMemoryTransfer.buildShareIntent(context) }.getOrNull()
+                    }
+                    if (intent == null) {
+                        Toast.makeText(context, "Памяти пока нет", Toast.LENGTH_SHORT).show()
+                    } else {
+                        context.startActivity(
+                            Intent.createChooser(intent, "Отправить память")
+                        )
+                    }
+                }
+            },
+            enabled = knownNetworks.isNotEmpty(),
+            modifier = Modifier.weight(1f),
+            shape = RoundedCornerShape(14.dp),
+        ) { Text("Экспорт") }
+
+        OutlinedButton(
+            onClick = { importLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) },
+            enabled = !tunnelRunning,
+            modifier = Modifier.weight(1f),
+            shape = RoundedCornerShape(14.dp),
+        ) { Text("Импорт") }
+    }
+    if (tunnelRunning) {
+        Text(
+            "Импорт — при остановленном туннеле: работающее ядро переписывает память раз в минуту.",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
