@@ -1545,6 +1545,7 @@ private suspend fun performUninstall(
                     "iptables -D INPUT -p udp --dport 56100 -m comment --comment WDTT_HY2_MANAGED -j ACCEPT 2>/dev/null || true; " +
                     "iptables -D INPUT -p udp --dport 56101 -m comment --comment WDTT_HY2_MANAGED -j ACCEPT 2>/dev/null || true; " +
                     "iptables -D INPUT -p tcp --dport 56102 -m comment --comment WDTT_HY2_MANAGED -j ACCEPT 2>/dev/null || true; " +
+                    "iptables -D INPUT -p udp --dport 56104 -m comment --comment WDTT_HY2_MANAGED -j ACCEPT 2>/dev/null || true; " +
                     "iptables -D INPUT -p tcp --dport $port -m comment --comment WDTT_HY2_MANAGED -j ACCEPT 2>/dev/null || true; " +
                     "iptables -D INPUT -p tcp --dport 22 -m comment --comment WDTT_HY2_MANAGED -j ACCEPT 2>/dev/null || true; " +
                     "iptables -D FORWARD -i wdtthy0 -m comment --comment WDTT_HY2_MANAGED -j ACCEPT 2>/dev/null || true; " +

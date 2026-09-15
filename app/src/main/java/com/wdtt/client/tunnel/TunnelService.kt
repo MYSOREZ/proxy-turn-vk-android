@@ -96,8 +96,14 @@ class TunnelService : Service() {
                         val noDtlsEnabled = !isRawTun && store.noDtlsEnabled.first()
                         val serverDirectPort = if (manualPortsEnabled) store.serverDirectPort.first() else 56102
                         val serverRawPort = if (manualPortsEnabled) store.serverRawPort.first() else 56103
+                        // ИИ-маскировка — отдельный слушатель сервера (-ai-listen):
+                        // её формат на проводе с обычной обфускацией не совместим,
+                        // поэтому и порт у неё свой.
+                        val aiObfsEnabled = store.aiObfsEnabled.first()
+                        val serverAiPort = store.serverAiPort.first()
                         val effectiveServerPort = when {
                             isRawTun -> serverRawPort
+                            aiObfsEnabled -> serverAiPort
                             noDtlsEnabled -> serverDirectPort
                             else -> serverDtlsPort
                         }
@@ -156,6 +162,9 @@ class TunnelService : Service() {
                             socksUsername = socksUsername,
                             socksPassword = socksPassword,
                             noDtls = noDtlsEnabled,
+                            hy2UpMbps = store.hy2UpMbps.first(),
+                            hy2DownMbps = store.hy2DownMbps.first(),
+                            aiObfs = aiObfsEnabled,
                             turnTcp = store.turnTcpEnabled.first(),
                             detailedLogs = store.detailedLogs.first()
                         )
@@ -211,8 +220,11 @@ class TunnelService : Service() {
                 val noDtlsEnabled = !isRawTunRestore && store.noDtlsEnabled.first()
                 val serverDirectPort = if (manualPortsEnabled) store.serverDirectPort.first() else 56102
                 val serverRawPort = if (manualPortsEnabled) store.serverRawPort.first() else 56103
+                val aiObfsEnabled = store.aiObfsEnabled.first()
+                val serverAiPort = store.serverAiPort.first()
                 val effectiveServerPort = when {
                     isRawTunRestore -> serverRawPort
+                    aiObfsEnabled -> serverAiPort
                     noDtlsEnabled -> serverDirectPort
                     else -> serverDtlsPort
                 }
@@ -239,6 +251,9 @@ class TunnelService : Service() {
                     socksUsername = store.socksUsername.first(),
                     socksPassword = store.socksPassword.first(),
                     noDtls = noDtlsEnabled,
+                    hy2UpMbps = store.hy2UpMbps.first(),
+                    hy2DownMbps = store.hy2DownMbps.first(),
+                    aiObfs = aiObfsEnabled,
                     turnTcp = store.turnTcpEnabled.first(),
                     detailedLogs = store.detailedLogs.first()
                 )

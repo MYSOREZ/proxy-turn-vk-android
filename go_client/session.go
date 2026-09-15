@@ -19,7 +19,13 @@ import (
 	"github.com/pion/logging"
 	"github.com/pion/transport/v4/stdnet"
 	"github.com/pion/turn/v5"
+
+	"wg-turn-client/aiobfs"
 )
+
+// aiObfsAutonomousInterval — как часто шейпер aiobfs сам зондирует путь
+// (RTT/потери) и пересматривает профиль маскировки при tp.AIObfs.
+const aiObfsAutonomousInterval = 3 * time.Second
 
 const (
 	workerSendBuf      = 128
@@ -320,7 +326,25 @@ func RunSession(
 
 		var dtlsObfsCfg *ObfsConfig
 		var obfsWriteState *ObfsState
-		if useWrap {
+		// useAI: адаптивная маскировка вместо статичной. Ключ тот же
+		// (выведенный из пароля), а вот формат на проводе другой — поэтому
+		// сервер должен слушать -ai-listen, и peer должен указывать туда.
+		var shaper *aiobfs.Shaper
+		useAI := useWrap && tp.AIObfs
+		if useAI {
+			shaper, err = aiobfs.New(aiobfs.Config{Key: tp.WrapKey})
+			if err != nil {
+				return false, fmt.Errorf("aiobfs init: %w", err)
+			}
+			// Самостоятельные замеры RTT/потерь: шейпер сам шлёт пробы и по
+			// ответам решает, какой профиль маскировки сейчас выгоднее.
+			stopAuto := shaper.RunAutonomous(sessCtx, func(wire []byte) error {
+				_, werr := relay.WriteTo(wire, peer)
+				return werr
+			}, aiObfsAutonomousInterval)
+			defer stopAuto()
+			log.Printf("[СЕССИЯ #%d] [AI-OBFS] Адаптивная маскировка включена", sessionID)
+		} else if useWrap {
 			dtlsObfsCfg, err = NewObfsConfig(tp.ObfsMode)
 			if err != nil {
 				return false, fmt.Errorf("RTP-obfs config: %w", err)
@@ -353,7 +377,22 @@ func RunSession(
 					return
 				}
 				payload := buf[:n]
-				if useWrap {
+				if useAI {
+					p, isDecoy, wrapErr := shaper.Unwrap(payload)
+					if wrapErr != nil {
+						log.Printf("[СЕССИЯ #%d] AI-OBFS unwrap: %v (n=%d)", sessionID, wrapErr, n)
+						continue
+					}
+					// Ответ на пробу сервера отправляем сразу, иначе он не
+					// сможет измерить RTT в обратную сторону.
+					if pong, ok := shaper.PendingPong(); ok {
+						_, _ = relay.WriteTo(pong, peer)
+					}
+					if isDecoy {
+						continue // проба/понг/ложный пакет — в туннель не идёт
+					}
+					payload = p
+				} else if useWrap {
 					if !obfsIsRTPPacket(payload) {
 						log.Printf("[СЕССИЯ #%d] OBFS unwrap: unexpected packet (n=%d)", sessionID, n)
 						continue
@@ -388,7 +427,14 @@ func RunSession(
 					return
 				}
 				out := b[:n]
-				if useWrap {
+				if useAI {
+					wrapped, wrapErr := shaper.Wrap(out)
+					if wrapErr != nil {
+						log.Printf("[СЕССИЯ #%d] AI-OBFS wrap: %v", sessionID, wrapErr)
+						return
+					}
+					out = wrapped
+				} else if useWrap {
 					if dtlsObfsCfg != nil && obfsWriteState != nil {
 						wrapped, wrapErr := obfsWrapPacket(tp.WrapKey, out, dtlsObfsCfg, obfsWriteState)
 						if wrapErr != nil {

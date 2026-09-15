@@ -317,6 +317,14 @@ type TurnParams struct {
 	// RawMode: raw-IP без WireGuard (см. server/main.go -listen-raw, handleConnRaw).
 	// Подразумевает NoDTLS — сервер на -listen-raw DTLS не понимает.
 	RawMode bool
+	// AIObfs переключает RunSession со статичной обфускации
+	// (ObfsConfig/ObfsState, obfsWrapPacket/obfsUnwrapPacket) на адаптивный
+	// слой aiobfs: несколько профилей маскировки и онлайн-обучение вместо
+	// одной формы на всю сессию. Сервер должен слушать -ai-listen, и peer
+	// должен указывать именно на этот порт: форматы на проводе у двух слоёв
+	// не совместимы (AES-256-GCM с RTP-заголовком как nonce против
+	// ChaCha20-Poly1305 с другим порядком nonce). RunPing не затрагивает.
+	AIObfs bool
 	// TCPTransport: соединяться с TURN-relay по TCP вместо UDP (см.
 	// dialTURNConn в session.go). На некоторых сетях (замечено на
 	// Ростелекоме) UDP до TURN душится/дропается провайдером агрессивнее,

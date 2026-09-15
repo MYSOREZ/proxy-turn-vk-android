@@ -132,6 +132,12 @@ class SettingsStore(context: Context) {
         /** vpn = Android VpnService; socks = локальный SOCKS5 без VPN. */
         private val CONNECTION_MODE = stringPreferencesKey("connection_mode")
         private val SOCKS_PORT = intPreferencesKey("socks_port")
+        /** Hysteria2: ноль в обеих полосах = BBR, ненулевые = Brutal. */
+        private val HY2_UP_MBPS = intPreferencesKey("hy2_up_mbps")
+        private val HY2_DOWN_MBPS = intPreferencesKey("hy2_down_mbps")
+        /** Адаптивная ИИ-маскировка (aiobfs) вместо статичной RTP-обфускации. */
+        private val AI_OBFS_ENABLED = booleanPreferencesKey("ai_obfs_enabled")
+        private val SERVER_AI_PORT = intPreferencesKey("server_ai_port")
         private val SOCKS_AUTH_ENABLED = booleanPreferencesKey("socks_auth_enabled")
         private val SOCKS_USERNAME = stringPreferencesKey("socks_username")
         private val SOCKS_PASSWORD = stringPreferencesKey("socks_password")
@@ -147,6 +153,13 @@ class SettingsStore(context: Context) {
         const val CONNECTION_MODE_SOCKS = "socks"
         /** rawtun = сырые IP-пакеты напрямую в go_client через TUN-fd, вообще без WireGuard. */
         const val CONNECTION_MODE_RAWTUN = "rawtun"
+        /**
+         * hysteria = Hysteria2 (QUIC) внутри TURN-туннеля + системный VPN
+         * через netstack (см. go_client/hytun.go). Отдельный режим, а не
+         * вариант socks: SOCKS5-режим — это userspace WireGuard без VPN, и
+         * подменять его было неправильно.
+         */
+        const val CONNECTION_MODE_HYSTERIA = "hysteria"
 
         private val HAS_SEEN_WELCOME_DIALOG = booleanPreferencesKey("has_seen_welcome_dialog")
         private val LAST_SEEN_VERSION_CODE = intPreferencesKey("last_seen_version_code")
@@ -172,6 +185,7 @@ class SettingsStore(context: Context) {
             return when {
                 mode.equals(CONNECTION_MODE_SOCKS, ignoreCase = true) -> CONNECTION_MODE_SOCKS
                 mode.equals(CONNECTION_MODE_RAWTUN, ignoreCase = true) -> CONNECTION_MODE_RAWTUN
+                mode.equals(CONNECTION_MODE_HYSTERIA, ignoreCase = true) -> CONNECTION_MODE_HYSTERIA
                 else -> CONNECTION_MODE_VPN
             }
         }
@@ -438,6 +452,17 @@ class SettingsStore(context: Context) {
     val sortProfilesByPing: Flow<Boolean> = dataStore.data.map { it[SORT_PROFILES_BY_PING] ?: false }
     val connectionMode: Flow<String> = dataStore.data.map { normalizeConnectionMode(it[CONNECTION_MODE]) }
     val socksPort: Flow<Int> = dataStore.data.map { normalizeSocksPort(it[SOCKS_PORT] ?: DEFAULT_SOCKS_PORT) }
+
+    /**
+     * Полосы Hysteria2 в Мбит/с. Ноль в обеих = контроль перегрузки BBR
+     * (по умолчанию). Ненулевые включают Brutal: он шлёт с заданной
+     * скоростью и не считает потери сигналом перегрузки.
+     */
+    val hy2UpMbps: Flow<Int> = dataStore.data.map { (it[HY2_UP_MBPS] ?: 0).coerceIn(0, 10_000) }
+    val hy2DownMbps: Flow<Int> = dataStore.data.map { (it[HY2_DOWN_MBPS] ?: 0).coerceIn(0, 10_000) }
+    /** Адаптивная ИИ-маскировка: нужен сервер, запущенный с -ai-listen. */
+    val aiObfsEnabled: Flow<Boolean> = dataStore.data.map { it[AI_OBFS_ENABLED] ?: false }
+    val serverAiPort: Flow<Int> = dataStore.data.map { (it[SERVER_AI_PORT] ?: 56104).coerceIn(1, 65535) }
     val socksAuthEnabled: Flow<Boolean> = dataStore.data.map { it[SOCKS_AUTH_ENABLED] ?: false }
     val socksUsername: Flow<String> = dataStore.data.map { it[SOCKS_USERNAME] ?: "" }
     val socksPassword: Flow<String> = dataStore.data.map {
@@ -461,6 +486,21 @@ class SettingsStore(context: Context) {
 
     suspend fun saveConnectionMode(mode: String) {
         dataStore.edit { prefs -> prefs[CONNECTION_MODE] = normalizeConnectionMode(mode) }
+    }
+
+    suspend fun saveHy2Bandwidth(upMbps: Int, downMbps: Int) {
+        dataStore.edit { prefs ->
+            prefs[HY2_UP_MBPS] = upMbps.coerceIn(0, 10_000)
+            prefs[HY2_DOWN_MBPS] = downMbps.coerceIn(0, 10_000)
+        }
+    }
+
+    suspend fun saveAiObfsEnabled(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[AI_OBFS_ENABLED] = enabled }
+    }
+
+    suspend fun saveServerAiPort(port: Int) {
+        dataStore.edit { prefs -> prefs[SERVER_AI_PORT] = port.coerceIn(1, 65535) }
     }
 
     suspend fun saveSocksPort(port: Int) {

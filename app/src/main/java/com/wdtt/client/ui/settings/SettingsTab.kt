@@ -178,7 +178,19 @@ fun SettingsTabContent(
     var socksPasswordInput by rememberSaveable { mutableStateOf("") }
     val turnTcpEnabled by settingsStore.turnTcpEnabled.collectAsStateWithLifecycle(initialValue = true)
     val serverRawPort by settingsStore.serverRawPort.collectAsStateWithLifecycle(initialValue = 56103)
+    val hy2UpMbps by settingsStore.hy2UpMbps.collectAsStateWithLifecycle(initialValue = 0)
+    val hy2DownMbps by settingsStore.hy2DownMbps.collectAsStateWithLifecycle(initialValue = 0)
+    val aiObfsEnabled by settingsStore.aiObfsEnabled.collectAsStateWithLifecycle(initialValue = false)
+    val serverAiPort by settingsStore.serverAiPort.collectAsStateWithLifecycle(initialValue = 56104)
     var serverRawPortInput by rememberSaveable { mutableStateOf("56103") }
+    var hy2UpInput by rememberSaveable { mutableStateOf("0") }
+    var hy2DownInput by rememberSaveable { mutableStateOf("0") }
+    var serverAiPortInput by rememberSaveable { mutableStateOf("56104") }
+    LaunchedEffect(hy2UpMbps, hy2DownMbps) {
+        hy2UpInput = hy2UpMbps.toString()
+        hy2DownInput = hy2DownMbps.toString()
+    }
+    LaunchedEffect(serverAiPort) { serverAiPortInput = serverAiPort.toString() }
     LaunchedEffect(serverRawPort) {
         serverRawPortInput = serverRawPort.toString()
     }
@@ -1194,10 +1206,11 @@ fun SettingsTabContent(
                             fontWeight = FontWeight.Medium
                         )
                         Text(
-                            "Оба варианта — полноценный VPN (весь трафик через туннель), отличается только " +
-                                "транспортный протокол. WireGuard — основной, проверенный. Raw — без " +
-                                "WireGuard вообще, эксперимент, нужен сервер с -listen-raw. SOCKS5 — без " +
-                                "VPN-разрешения, прокси вручную.",
+                            "WG — основной, проверенный: WireGuard внутри туннеля, весь трафик через VPN. " +
+                                "Raw — без WireGuard вообще, эксперимент, нужен сервер с -listen-raw. " +
+                                "SOCKS — userspace WireGuard и локальный прокси, без VPN-разрешения. " +
+                                "HY2 — Hysteria2 (QUIC) внутри туннеля, полный VPN: QUIC сам восстанавливает " +
+                                "потери релея, поэтому скорость меньше проседает на длинных закачках.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1232,6 +1245,17 @@ fun SettingsTabContent(
                                 onClick = {
                                     if (!tunnelRunning) {
                                         scope.launch { settingsStore.saveConnectionMode(SettingsStore.CONNECTION_MODE_SOCKS) }
+                                    }
+                                },
+                                label = { Text("SOCKS") },
+                                enabled = !tunnelRunning,
+                                modifier = Modifier.weight(1f)
+                            )
+                            FilterChip(
+                                selected = connectionMode == SettingsStore.CONNECTION_MODE_HYSTERIA,
+                                onClick = {
+                                    if (!tunnelRunning) {
+                                        scope.launch { settingsStore.saveConnectionMode(SettingsStore.CONNECTION_MODE_HYSTERIA) }
                                     }
                                 },
                                 label = { Text("HY2") },
@@ -1400,6 +1424,105 @@ fun SettingsTabContent(
                                 }
                             }
                         }
+                        if (connectionMode == SettingsStore.CONNECTION_MODE_HYSTERIA) {
+                            val brutalOn = hy2UpMbps > 0 || hy2DownMbps > 0
+                            Text(
+                                "Контроль перегрузки Hysteria2",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            Text(
+                                "BBR сам подбирает скорость по состоянию канала. Brutal шлёт с заданной " +
+                                    "полосой и не считает потери сигналом перегрузки — на душимом канале " +
+                                    "обычно ровнее, но задранная цифра забьёт канал.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                FilterChip(
+                                    selected = !brutalOn,
+                                    onClick = {
+                                        if (!tunnelRunning) {
+                                            scope.launch { settingsStore.saveHy2Bandwidth(0, 0) }
+                                        }
+                                    },
+                                    label = { Text("BBR") },
+                                    enabled = !tunnelRunning,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                FilterChip(
+                                    selected = brutalOn,
+                                    onClick = {
+                                        if (!tunnelRunning) {
+                                            // Значения по умолчанию — заведомо скромные,
+                                            // чтобы Brutal не забил канал при включении.
+                                            scope.launch { settingsStore.saveHy2Bandwidth(20, 50) }
+                                        }
+                                    },
+                                    label = { Text("Brutal") },
+                                    enabled = !tunnelRunning,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            AnimatedVisibility(visible = brutalOn) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    OutlinedTextField(
+                                        value = hy2UpInput,
+                                        onValueChange = { value ->
+                                            if (value.all { it.isDigit() } && value.length <= 5) {
+                                                hy2UpInput = value
+                                                scope.launch {
+                                                    settingsStore.saveHy2Bandwidth(
+                                                        value.toIntOrNull() ?: 0,
+                                                        hy2DownInput.toIntOrNull() ?: 0,
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        label = { Text("Вверх, Мбит/с") },
+                                        singleLine = true,
+                                        enabled = !tunnelRunning,
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(14.dp),
+                                    )
+                                    OutlinedTextField(
+                                        value = hy2DownInput,
+                                        onValueChange = { value ->
+                                            if (value.all { it.isDigit() } && value.length <= 5) {
+                                                hy2DownInput = value
+                                                scope.launch {
+                                                    settingsStore.saveHy2Bandwidth(
+                                                        hy2UpInput.toIntOrNull() ?: 0,
+                                                        value.toIntOrNull() ?: 0,
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        label = { Text("Вниз, Мбит/с") },
+                                        singleLine = true,
+                                        enabled = !tunnelRunning,
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(14.dp),
+                                    )
+                                }
+                            }
+                            if (turnTcpEnabled) {
+                                Text(
+                                    "TURN-транспорт сейчас TCP. Hysteria2 — это QUIC, и по TCP-плечу его " +
+                                        "датаграммы едут внутри TCP: потери там разгребает TCP, а это ровно " +
+                                        "то, от чего QUIC уходит. Если UDP до TURN у провайдера жив — на HY2 " +
+                                        "лучше UDP.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+                        }
                         if (tunnelRunning) {
                             Text(
                                 "Смена режима — после отключения туннеля",
@@ -1464,15 +1587,75 @@ fun SettingsTabContent(
                         ) {
                             listOf("audio" to "Аудио", "video" to "Видео").forEach { (mode, label) ->
                                 FilterChip(
-                                    selected = obfsMode == mode,
+                                    selected = obfsMode == mode && !aiObfsEnabled,
                                     onClick = {
                                         if (!tunnelRunning) {
                                             scope.launch { settingsStore.saveObfsMode(mode) }
                                         }
                                     },
                                     label = { Text(label) },
-                                    enabled = !tunnelRunning,
+                                    enabled = !tunnelRunning && !aiObfsEnabled,
                                     modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+
+                        // ═══ Адаптивная ИИ-маскировка (aiobfs) ═══
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "Адаптивная ИИ-маскировка",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                                Text(
+                                    "Вместо одной статичной маски — несколько профилей (аудио, видео, " +
+                                        "демонстрация экрана, пауза) и постоянные переключения между ними. " +
+                                        "Выбор ведёт онлайн-обучение (бандит EXP3 + маленькая сеть) по " +
+                                        "измеренным RTT и потерям, плюс ложные пакеты и дрейф размеров. " +
+                                        "Эксперимент: нужен сервер, запущенный с -ai-listen.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Switch(
+                                checked = aiObfsEnabled,
+                                onCheckedChange = { enabled ->
+                                    if (!tunnelRunning) {
+                                        scope.launch { settingsStore.saveAiObfsEnabled(enabled) }
+                                    }
+                                },
+                                enabled = !tunnelRunning,
+                            )
+                        }
+                        AnimatedVisibility(visible = aiObfsEnabled) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(
+                                    value = serverAiPortInput,
+                                    onValueChange = { value ->
+                                        if (value.all { it.isDigit() } && value.length <= 5) {
+                                            serverAiPortInput = value
+                                            value.toIntOrNull()?.let { port ->
+                                                scope.launch { settingsStore.saveServerAiPort(port) }
+                                            }
+                                        }
+                                    },
+                                    label = { Text("Порт сервера (-ai-listen)") },
+                                    singleLine = true,
+                                    enabled = !tunnelRunning,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(14.dp),
+                                )
+                                Text(
+                                    "Формат на проводе несовместим с обычной маскировкой, поэтому у неё " +
+                                        "свой слушатель и свой порт. Установите сервер этой сборкой заново, " +
+                                        "чтобы он поднял -ai-listen.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
                         }
@@ -2003,6 +2186,17 @@ fun SettingsTabContent(
                     onClick = {
                         if (!tunnelRunning) {
                             scope.launch { settingsStore.saveConnectionMode(SettingsStore.CONNECTION_MODE_SOCKS) }
+                        }
+                    },
+                    label = { Text("SOCKS") },
+                    enabled = !tunnelRunning,
+                    modifier = Modifier.weight(1f)
+                )
+                FilterChip(
+                    selected = connectionMode == SettingsStore.CONNECTION_MODE_HYSTERIA,
+                    onClick = {
+                        if (!tunnelRunning) {
+                            scope.launch { settingsStore.saveConnectionMode(SettingsStore.CONNECTION_MODE_HYSTERIA) }
                         }
                     },
                     label = { Text("HY2") },

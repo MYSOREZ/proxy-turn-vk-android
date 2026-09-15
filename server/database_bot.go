@@ -480,6 +480,20 @@ func (s *wrapKeyStore) Count() int {
 	return len(s.entries)
 }
 
+// Keys отдаёт копии всех действующих WRAP-ключей. Нужен адаптивной
+// ИИ-маскировке (см. server_ai.go): её слушатель подбирает ключ сам через
+// aiobfs.TryUnwrap, а не через Unwrap этого хранилища — формат на проводе у
+// них разный, общие только пароли.
+func (s *wrapKeyStore) Keys() [][]byte {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([][]byte, len(s.entries))
+	for i, entry := range s.entries {
+		out[i] = append([]byte(nil), entry.key...)
+	}
+	return out
+}
+
 func (s *wrapKeyStore) Unwrap(raw, dst []byte) ([]byte, string, int, error) {
 	if !obfsIsRTPPacket(raw) {
 		return nil, "", 0, errors.New("wrap: non-obfs packet")

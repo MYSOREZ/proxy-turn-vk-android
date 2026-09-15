@@ -46,6 +46,7 @@ func main() {
 	// используется — так правка не задевает управление пирами и БД.
 	forwardTo := flag.String("forward", "", "локальный UDP-адрес для расшифрованного трафика вместо встроенного WireGuard (напр. 127.0.0.1:56443 для Hysteria2)")
 	wgIface := flag.String("wg-iface", wgIfaceName, "имя TUN-интерфейса встроенного WireGuard (менять при нескольких экземплярах на одном сервере)")
+	aiListen := flag.String("ai-listen", "", "доп. DTLS адрес с адаптивной ИИ-маскировкой трафика (независим от -listen, формат на проводе другой; см. server_ai.go)")
 	// Разовая проверка пароля для внешней авторизации Hysteria2 — см. authcheck.go.
 	authCheck := flag.String("auth-check", "", "проверить пароль по базе и выйти (0 — принят); для auth.type=command в Hysteria2")
 	flag.Parse()
@@ -314,6 +315,8 @@ func main() {
 			}
 		}()
 	}
+
+	startAIListener(ctx, *aiListen, wgEndpoint, wgDev, keys, cert)
 
 	log.Println("[SERVER] Готов")
 

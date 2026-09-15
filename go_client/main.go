@@ -189,7 +189,8 @@ func main() {
 	socksPass := flag.String("socks-pass", "", "пароль SOCKS5")
 	noDTLS := flag.Bool("notls", false, "прямой режим: RTP-obfs AEAD без DTLS поверх TURN (нужен сервер с -listen-direct)")
 	turnTCP := flag.Bool("turn-tcp", false, "соединяться с TURN-relay по TCP вместо UDP (обход UDP-душения на некоторых сетях, напр. Ростелеком)")
-	tunFdSock := flag.String("tun-fd-sock", "", "unix-сокет для получения TUN fd от Android (только -mode rawtun)")
+	tunFdSock := flag.String("tun-fd-sock", "", "unix-сокет для получения TUN fd от Android (режимы rawtun и hysteria)")
+	aiObfs := flag.Bool("ai-obfs", false, "адаптивная ИИ-маскировка вместо статичной (нужен сервер с -ai-listen, peer должен указывать на его порт)")
 
 	flag.Parse()
 	activeConnMode := strings.ToLower(strings.TrimSpace(*connMode))
@@ -288,6 +289,7 @@ func main() {
 		NoDTLS:       *noDTLS,
 		RawMode:      activeConnMode == "rawtun",
 		TCPTransport: *turnTCP,
+		AIObfs:       *aiObfs,
 	}
 
 	if *pingOnly {

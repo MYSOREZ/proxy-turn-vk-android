@@ -16,6 +16,9 @@ readonly WG_PORT="${WDTT_WG_PORT:-56101}"
 readonly DTLS_PORT="${WDTT_DTLS_PORT:-56100}"
 readonly SSH_PORT="${WDTT_SSH_PORT:-22}"
 readonly ADMIN_PORT="${WDTT_ADMIN_PORT:-56102}"
+# Адаптивная ИИ-маскировка (-ai-listen): отдельный слушатель, потому что её
+# формат на проводе не совместим с обычной RTP-обфускацией на -listen.
+readonly AI_PORT="${WDTT_HY2_AI_PORT:-56104}"
 # Пусто = выключено. Экспериментальный порт для клиентов без DTLS (RTP-obfs AEAD напрямую).
 readonly DIRECT_PORT="${WDTT_DIRECT_PORT:-}"
 # Raw-IP путь (свой TUN/NAT без WireGuard) в сборке HY2 НЕ используется и
@@ -462,6 +465,7 @@ setup_nat_and_firewall() {
     if [ -n "$DIRECT_PORT" ]; then
         fw_add_input_udp "$DIRECT_PORT"   # -listen-direct: клиенты без DTLS
     fi
+    fw_add_input_udp "$AI_PORT"           # -ai-listen: адаптивная ИИ-маскировка
     if [ -n "$RAW_PORT" ]; then
         fw_add_input_udp "$RAW_PORT"   # -listen-raw: raw-IP клиенты без WireGuard
     fi
@@ -480,7 +484,7 @@ setup_nat_and_firewall() {
     else
         echo "✓ NAT: MASQUERADE на $iface для 10.77.0.0/16"
     fi
-    echo "✓ Порты: ${DTLS_PORT}/udp(DTLS), ${WG_PORT}/udp(WG), ${SSH_PORT}/tcp(SSH)"
+    echo "✓ Порты: ${DTLS_PORT}/udp(DTLS), ${AI_PORT}/udp(ИИ-маскировка), ${WG_PORT}/udp(WG), ${SSH_PORT}/tcp(SSH)"
     echo "✓ TCP MSS Clamping включен"
 }
 
@@ -574,7 +578,7 @@ Wants=network-online.target
 Type=simple
 ExecStartPre=-/usr/bin/env bash -c "ip link show ${WDTT_IFACE} >/dev/null 2>&1 && ip link del ${WDTT_IFACE} 2>/dev/null || true"
 ExecStartPre=-/usr/bin/env bash -c "if command -v iptables >/dev/null 2>&1; then iptables -C INPUT -p udp --dport ${DTLS_PORT} -m comment --comment ${IPT_COMMENT} -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport ${DTLS_PORT} -m comment --comment ${IPT_COMMENT} -j ACCEPT; iptables -C INPUT -p tcp --dport ${DTLS_PORT} -m comment --comment ${IPT_COMMENT} -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport ${DTLS_PORT} -m comment --comment ${IPT_COMMENT} -j ACCEPT; iptables -C INPUT -i lo -p udp --dport ${WG_PORT} -m comment --comment WDTT_WG_INTERNAL -j ACCEPT 2>/dev/null || iptables -I INPUT -i lo -p udp --dport ${WG_PORT} -m comment --comment WDTT_WG_INTERNAL -j ACCEPT; iptables -C INPUT ! -i lo -p udp --dport ${WG_PORT} -m comment --comment WDTT_WG_INTERNAL -j DROP 2>/dev/null || iptables -I INPUT ! -i lo -p udp --dport ${WG_PORT} -m comment --comment WDTT_WG_INTERNAL -j DROP; iptables -C INPUT -p tcp --dport ${ADMIN_PORT} -m comment --comment ${IPT_COMMENT} -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport ${ADMIN_PORT} -m comment --comment ${IPT_COMMENT} -j ACCEPT; iptables -C INPUT -p tcp --dport ${SSH_PORT} -m comment --comment ${IPT_COMMENT} -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport ${SSH_PORT} -m comment --comment ${IPT_COMMENT} -j ACCEPT; ${direct_fw_rule}${raw_fw_rule}fi"
-ExecStart=/usr/local/bin/wdtt-hy2-server -listen 0.0.0.0:${DTLS_PORT} -forward 127.0.0.1:${HY2_PORT} -wg-iface ${WDTT_IFACE} -wg-port ${WG_PORT} -config-dir ${WDTT_CONFIG_DIR} -password-file ${WDTT_CONFIG_DIR}/main.password ${admin_exec_arg} ${bot_exec_arg} -dns ${DNS_SERVERS} -admin-listen 0.0.0.0:${ADMIN_PORT} -admin-token-file ${WDTT_CONFIG_DIR}/admin.token -admin-cert ${WDTT_CONFIG_DIR}/admin.crt -admin-key ${WDTT_CONFIG_DIR}/admin.key ${direct_exec_arg} ${raw_exec_arg}
+ExecStart=/usr/local/bin/wdtt-hy2-server -listen 0.0.0.0:${DTLS_PORT} -forward 127.0.0.1:${HY2_PORT} -wg-iface ${WDTT_IFACE} -wg-port ${WG_PORT} -config-dir ${WDTT_CONFIG_DIR} -password-file ${WDTT_CONFIG_DIR}/main.password ${admin_exec_arg} ${bot_exec_arg} -dns ${DNS_SERVERS} -ai-listen 0.0.0.0:${AI_PORT} -admin-listen 0.0.0.0:${ADMIN_PORT} -admin-token-file ${WDTT_CONFIG_DIR}/admin.token -admin-cert ${WDTT_CONFIG_DIR}/admin.crt -admin-key ${WDTT_CONFIG_DIR}/admin.key ${direct_exec_arg} ${raw_exec_arg}
 Restart=always
 RestartSec=5
 LimitNOFILE=65535

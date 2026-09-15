@@ -531,6 +531,18 @@ object TunnelManager {
                     cmd.add("-turn-tcp")
                 }
 
+                // Адаптивная ИИ-маскировка: на сервере ей отвечает отдельный
+                // слушатель -ai-listen (порт уже подставлен в peer).
+                if (params.aiObfs) {
+                    cmd.add("-ai-obfs")
+                    updateLog(
+                        "ai_obfs",
+                        "[СЕТЬ] Маскировка: адаптивная (профили + онлайн-обучение), эксперимент",
+                        1,
+                        false
+                    )
+                }
+
                 val mode = SettingsStore.normalizeConnectionMode(params.connectionMode)
                 cmd.add("-mode")
                 when {
@@ -545,6 +557,23 @@ object TunnelManager {
                     mode == SettingsStore.CONNECTION_MODE_VPN -> {
                         cmd.add("vpn")
                         updateLog("conn_mode", "[СЕТЬ] Режим: VPN (WireGuard)", 1, false)
+                    }
+                    mode == SettingsStore.CONNECTION_MODE_SOCKS -> {
+                        // Штатный режим оригинала: userspace WireGuard внутри
+                        // go_client + локальный SOCKS5, без VPN-разрешения.
+                        cmd.add("socks")
+                        val socks = params.socksListenAddress
+                        cmd.add("-socks")
+                        cmd.add(socks)
+                        if (params.socksAuthEnabled) {
+                            cmd.add("-socks-auth")
+                            cmd.add("-socks-user")
+                            cmd.add(params.socksUsername)
+                            cmd.add("-socks-pass")
+                            cmd.add(params.socksPassword)
+                        }
+                        val authLabel = if (params.socksAuthEnabled) ", с авторизацией" else ""
+                        updateLog("conn_mode", "[СЕТЬ] Режим: SOCKS5 ($socks$authLabel), без VPN", 1, false)
                     }
                     else -> {
                         // Сборка HY2: третий режим — не WireGuard-через-SOCKS, а
@@ -563,6 +592,13 @@ object TunnelManager {
                         cmd.add(socks)
                         cmd.add("-hy2-pass")
                         cmd.add(params.connectionPassword)
+                        // Ненулевые полосы включают на сервере Brutal вместо BBR.
+                        if (params.hy2UpMbps > 0 || params.hy2DownMbps > 0) {
+                            cmd.add("-hy2-up")
+                            cmd.add(params.hy2UpMbps.toString())
+                            cmd.add("-hy2-down")
+                            cmd.add(params.hy2DownMbps.toString())
+                        }
                         // Системный VPN: тот же механизм передачи TUN-fd, что и
                         // у raw-режима. go_client поднимет поверх дескриптора
                         // netstack и уведёт весь трафик устройства в Hysteria2.
@@ -577,7 +613,12 @@ object TunnelManager {
                             cmd.add(params.socksPassword)
                         }
                         val authLabel = if (params.socksAuthEnabled) ", с авторизацией" else ""
-                        updateLog("conn_mode", "[СЕТЬ] Режим: Hysteria2 (VPN на всё устройство; SOCKS5 $socks$authLabel)", 1, false)
+                        val ccLabel = if (params.hy2UpMbps > 0 || params.hy2DownMbps > 0) {
+                            "Brutal ↑${params.hy2UpMbps}/↓${params.hy2DownMbps} Мбит/с"
+                        } else {
+                            "BBR"
+                        }
+                        updateLog("conn_mode", "[СЕТЬ] Режим: Hysteria2, $ccLabel (VPN на всё устройство; SOCKS5 $socks$authLabel)", 1, false)
                     }
                 }
 
@@ -2233,6 +2274,11 @@ data class TunnelParams(
     val noDtls: Boolean = false,
     /** TURN-relay по TCP вместо UDP — обход UDP-душения на некоторых сетях (напр. Ростелеком). */
     val turnTcp: Boolean = false,
+    /** Hysteria2: полосы в Мбит/с. Обе нулевые = BBR, ненулевые включают Brutal. */
+    val hy2UpMbps: Int = 0,
+    val hy2DownMbps: Int = 0,
+    /** Адаптивная ИИ-маскировка (aiobfs) вместо статичной RTP-обфускации; нужен сервер с -ai-listen. */
+    val aiObfs: Boolean = false,
     val detailedLogs: Boolean = false
 ) {
     /** Go поднимает локальный SOCKS5 (userspace WG) вместо Android GoBackend — верно и для socks, и для rawtun. */
@@ -2243,9 +2289,9 @@ data class TunnelParams(
     val isRawTunMode: Boolean
         get() = SettingsStore.normalizeConnectionMode(connectionMode) == SettingsStore.CONNECTION_MODE_RAWTUN
 
-    /** Сборка HY2: третий режим — Hysteria2 (QUIC внутри TURN-туннеля). */
+    /** Hysteria2 (QUIC внутри TURN-туннеля) + системный VPN через netstack. */
     val isHysteriaMode: Boolean
-        get() = SettingsStore.normalizeConnectionMode(connectionMode) == SettingsStore.CONNECTION_MODE_SOCKS
+        get() = SettingsStore.normalizeConnectionMode(connectionMode) == SettingsStore.CONNECTION_MODE_HYSTERIA
 
     /**
      * Режимы, где системный TUN поднимает RawTunVpnService, а дескриптор
