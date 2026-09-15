@@ -70,12 +70,54 @@ func hyTunReadyMarker(dnsCSV string) string {
 type hyClientHolder struct {
 	mu sync.RWMutex
 	c  hyclient.Client
+	// dead закрывается, когда кто-то из пользователей клиента заметил, что
+	// сессия умерла: супервизор ждёт этот сигнал, чтобы поднять новую, и не
+	// опрашивает соединение вхолостую.
+	dead chan struct{}
 }
 
 func (h *hyClientHolder) set(c hyclient.Client) {
 	h.mu.Lock()
 	h.c = c
+	if c != nil {
+		h.dead = make(chan struct{})
+	}
 	h.mu.Unlock()
+}
+
+// publish ставит новый клиент на место старого и отдаёт старый вызывающему —
+// тот сам решит, когда его закрыть. Открытые соединения остаются в старой
+// сессии, новые уходят уже в новую: смена полосы не должна рвать то, что
+// пользователь качает прямо сейчас.
+func (h *hyClientHolder) publish(c hyclient.Client) (previous hyclient.Client) {
+	h.mu.Lock()
+	previous = h.c
+	h.c = c
+	h.dead = make(chan struct{})
+	h.mu.Unlock()
+	return previous
+}
+
+// markDead сообщает супервизору, что текущая сессия непригодна.
+func (h *hyClientHolder) markDead() {
+	h.mu.Lock()
+	ch := h.dead
+	h.mu.Unlock()
+	if ch == nil {
+		return
+	}
+	select {
+	case <-ch:
+	default:
+		close(ch)
+	}
+}
+
+// deadCh отдаёт канал текущей сессии для ожидания.
+func (h *hyClientHolder) deadCh() <-chan struct{} {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.dead
 }
 
 func (h *hyClientHolder) get() hyclient.Client {
@@ -216,6 +258,11 @@ func handleHyTCP(ctx context.Context, r *tcp.ForwarderRequest, holder *hyClientH
 	}
 	remote, err := c.TCP(target)
 	if err != nil {
+		if isHyClosed(err) {
+			// Умерла сама сессия, а не адрес недоступен: пусть супервизор
+			// поднимет новую, иначе весь VPN молча превратится в тупик.
+			holder.markDead()
+		}
 		logHyDialFailure("TCP", target, err)
 		r.Complete(true)
 		return
@@ -262,6 +309,9 @@ func handleHyUDP(ctx context.Context, r *udp.ForwarderRequest, holder *hyClientH
 
 	hyConn, err := c.UDP()
 	if err != nil {
+		if isHyClosed(err) {
+			holder.markDead()
+		}
 		logHyDialFailure("UDP", target, err)
 		local.Close()
 		return

@@ -343,6 +343,25 @@ func RunSession(
 				return werr
 			}, aiObfsAutonomousInterval)
 			defer stopAuto()
+
+			// Эти же замеры нужны контроллеру полосы Hysteria2 (hyauto.go):
+			// шейпер живёт в каждой сессии, а полосу подбирает один
+			// контроллер на клиент, поэтому складываем их в общую сводку.
+			go func() {
+				ticker := time.NewTicker(aiObfsAutonomousInterval)
+				defer ticker.Stop()
+				defer globalPath.forget(sessionID)
+				for {
+					select {
+					case <-sessCtx.Done():
+						return
+					case <-ticker.C:
+						if rttMs, loss, _, ok := shaper.PathStats(); ok {
+							globalPath.report(sessionID, rttMs, loss)
+						}
+					}
+				}
+			}()
 			log.Printf("[СЕССИЯ #%d] [AI-OBFS] Адаптивная маскировка включена", sessionID)
 		} else if useWrap {
 			dtlsObfsCfg, err = NewObfsConfig(tp.ObfsMode)

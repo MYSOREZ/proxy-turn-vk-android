@@ -150,6 +150,30 @@ func (s *Shaper) drainAutoStats() (rttMs, lossRate float64) {
 // Unwrap on everything received (so pongs — and the peer's own probes,
 // answered via PendingPong — get processed); it does not open sockets or
 // know anything about the transport itself.
+// storePathStats запоминает последний замер пути, чтобы его мог прочитать
+// не только сам обучающийся выбор профиля, но и вызывающая сторона — см.
+// PathStats. Замеры уже есть (SendProbe/PendingPong меряют RTT и долю
+// пропавших проб), до этого они никуда наружу не отдавались.
+func (s *Shaper) storePathStats(rttMs, lossRate float64) {
+	s.pathMu.Lock()
+	s.pathRTTMs = rttMs
+	s.pathLoss = lossRate
+	s.pathAt = time.Now()
+	s.pathMu.Unlock()
+}
+
+// PathStats отдаёт последний самостоятельный замер пути: RTT в миллисекундах,
+// долю потерь в [0,1] и возраст замера. ok=false, пока не было ни одного
+// окна измерений (RunAutonomous не запущен или ещё не тикнул).
+func (s *Shaper) PathStats() (rttMs, lossRate float64, age time.Duration, ok bool) {
+	s.pathMu.Lock()
+	defer s.pathMu.Unlock()
+	if s.pathAt.IsZero() {
+		return 0, 0, 0, false
+	}
+	return s.pathRTTMs, s.pathLoss, time.Since(s.pathAt), true
+}
+
 func (s *Shaper) RunAutonomous(ctx context.Context, send func(wire []byte) error, interval time.Duration) (stop func()) {
 	if interval <= 0 {
 		interval = 2 * time.Second
@@ -175,6 +199,7 @@ func (s *Shaper) RunAutonomous(ctx context.Context, send func(wire []byte) error
 				}
 			case <-evalTicker.C:
 				rttMs, lossRate := s.drainAutoStats()
+				s.storePathStats(rttMs, lossRate)
 				s.Observe(rttMs, lossRate, 0)
 			}
 		}

@@ -78,6 +78,13 @@ type Config struct {
 // small online-trained policy network (policy.go). See the package doc
 // comment in profile.go for the overall design rationale.
 type Shaper struct {
+	// Последний самостоятельный замер пути (см. PathStats): его читает не
+	// только обучение, но и внешний контроллер полосы.
+	pathMu    sync.Mutex
+	pathRTTMs float64
+	pathLoss  float64
+	pathAt    time.Time
+
 	aead cipher.AEAD
 
 	profiles []Profile

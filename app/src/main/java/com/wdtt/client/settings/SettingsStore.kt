@@ -135,6 +135,8 @@ class SettingsStore(context: Context) {
         /** Hysteria2: ноль в обеих полосах = BBR, ненулевые = Brutal. */
         private val HY2_UP_MBPS = intPreferencesKey("hy2_up_mbps")
         private val HY2_DOWN_MBPS = intPreferencesKey("hy2_down_mbps")
+        /** Автоподбор полосы Brutal по замерам (перебивает ручные значения). */
+        private val HY2_AUTO_BANDWIDTH = booleanPreferencesKey("hy2_auto_bandwidth")
         /** Адаптивная ИИ-маскировка (aiobfs) вместо статичной RTP-обфускации. */
         private val AI_OBFS_ENABLED = booleanPreferencesKey("ai_obfs_enabled")
         private val SERVER_AI_PORT = intPreferencesKey("server_ai_port")
@@ -460,6 +462,13 @@ class SettingsStore(context: Context) {
      */
     val hy2UpMbps: Flow<Int> = dataStore.data.map { (it[HY2_UP_MBPS] ?: 0).coerceIn(0, 10_000) }
     val hy2DownMbps: Flow<Int> = dataStore.data.map { (it[HY2_DOWN_MBPS] ?: 0).coerceIn(0, 10_000) }
+
+    /**
+     * Автоподбор полосы: клиент сам меряет путь и двигает полосу Brutal.
+     * Смысл в том, что у мобильного канала постоянного числа нет, а Brutal
+     * его требует.
+     */
+    val hy2AutoBandwidth: Flow<Boolean> = dataStore.data.map { it[HY2_AUTO_BANDWIDTH] ?: false }
     /** Адаптивная ИИ-маскировка: нужен сервер, запущенный с -ai-listen. */
     val aiObfsEnabled: Flow<Boolean> = dataStore.data.map { it[AI_OBFS_ENABLED] ?: false }
     val serverAiPort: Flow<Int> = dataStore.data.map { (it[SERVER_AI_PORT] ?: 56104).coerceIn(1, 65535) }
@@ -493,6 +502,10 @@ class SettingsStore(context: Context) {
             prefs[HY2_UP_MBPS] = upMbps.coerceIn(0, 10_000)
             prefs[HY2_DOWN_MBPS] = downMbps.coerceIn(0, 10_000)
         }
+    }
+
+    suspend fun saveHy2AutoBandwidth(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[HY2_AUTO_BANDWIDTH] = enabled }
     }
 
     suspend fun saveAiObfsEnabled(enabled: Boolean) {

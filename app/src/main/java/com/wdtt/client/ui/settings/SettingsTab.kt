@@ -181,6 +181,7 @@ fun SettingsTabContent(
     val hy2UpMbps by settingsStore.hy2UpMbps.collectAsStateWithLifecycle(initialValue = 0)
     val hy2DownMbps by settingsStore.hy2DownMbps.collectAsStateWithLifecycle(initialValue = 0)
     val aiObfsEnabled by settingsStore.aiObfsEnabled.collectAsStateWithLifecycle(initialValue = false)
+    val hy2AutoBandwidth by settingsStore.hy2AutoBandwidth.collectAsStateWithLifecycle(initialValue = false)
     val serverAiPort by settingsStore.serverAiPort.collectAsStateWithLifecycle(initialValue = 56104)
     var serverRawPortInput by rememberSaveable { mutableStateOf("56103") }
     var hy2UpInput by rememberSaveable { mutableStateOf("0") }
@@ -1425,7 +1426,7 @@ fun SettingsTabContent(
                             }
                         }
                         if (connectionMode == SettingsStore.CONNECTION_MODE_HYSTERIA) {
-                            val brutalOn = hy2UpMbps > 0 || hy2DownMbps > 0
+                            val brutalOn = !hy2AutoBandwidth && (hy2UpMbps > 0 || hy2DownMbps > 0)
                             Text(
                                 "Контроль перегрузки Hysteria2",
                                 style = MaterialTheme.typography.bodyMedium,
@@ -1443,10 +1444,13 @@ fun SettingsTabContent(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
                                 FilterChip(
-                                    selected = !brutalOn,
+                                    selected = !brutalOn && !hy2AutoBandwidth,
                                     onClick = {
                                         if (!tunnelRunning) {
-                                            scope.launch { settingsStore.saveHy2Bandwidth(0, 0) }
+                                            scope.launch {
+                                                settingsStore.saveHy2AutoBandwidth(false)
+                                                settingsStore.saveHy2Bandwidth(0, 0)
+                                            }
                                         }
                                     },
                                     label = { Text("BBR") },
@@ -1459,12 +1463,37 @@ fun SettingsTabContent(
                                         if (!tunnelRunning) {
                                             // Значения по умолчанию — заведомо скромные,
                                             // чтобы Brutal не забил канал при включении.
-                                            scope.launch { settingsStore.saveHy2Bandwidth(20, 50) }
+                                            scope.launch {
+                                                settingsStore.saveHy2AutoBandwidth(false)
+                                                settingsStore.saveHy2Bandwidth(20, 50)
+                                            }
                                         }
                                     },
                                     label = { Text("Brutal") },
                                     enabled = !tunnelRunning,
                                     modifier = Modifier.weight(1f),
+                                )
+                                FilterChip(
+                                    selected = hy2AutoBandwidth,
+                                    onClick = {
+                                        if (!tunnelRunning) {
+                                            scope.launch { settingsStore.saveHy2AutoBandwidth(true) }
+                                        }
+                                    },
+                                    label = { Text("Авто") },
+                                    enabled = !tunnelRunning,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            if (hy2AutoBandwidth) {
+                                Text(
+                                    "Полосу подбирает сам клиент и пересматривает на ходу: растит, пока " +
+                                        "канал выбирается полностью, и режет при потерях или раздутом RTT. " +
+                                        "Числа вводить не нужно — это для мобильного интернета, где " +
+                                        "скорость меняется от соты к соте. Точнее работает вместе с " +
+                                        "адаптивной ИИ-маскировкой: замеры RTT и потерь берутся с её проб.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
                             AnimatedVisibility(visible = brutalOn) {

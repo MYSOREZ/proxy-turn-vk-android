@@ -164,6 +164,7 @@ class TunnelService : Service() {
                             noDtls = noDtlsEnabled,
                             hy2UpMbps = store.hy2UpMbps.first(),
                             hy2DownMbps = store.hy2DownMbps.first(),
+                            hy2AutoBandwidth = store.hy2AutoBandwidth.first(),
                             aiObfs = aiObfsEnabled,
                             turnTcp = store.turnTcpEnabled.first(),
                             detailedLogs = store.detailedLogs.first()
@@ -253,6 +254,7 @@ class TunnelService : Service() {
                     noDtls = noDtlsEnabled,
                     hy2UpMbps = store.hy2UpMbps.first(),
                     hy2DownMbps = store.hy2DownMbps.first(),
+                    hy2AutoBandwidth = store.hy2AutoBandwidth.first(),
                     aiObfs = aiObfsEnabled,
                     turnTcp = store.turnTcpEnabled.first(),
                     detailedLogs = store.detailedLogs.first()

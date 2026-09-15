@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	hyclient "github.com/apernet/hysteria/core/v2/client"
+	hyerrs "github.com/apernet/hysteria/core/v2/errors"
 	"github.com/armon/go-socks5"
 )
 
@@ -53,6 +55,44 @@ func (remoteResolver) Resolve(ctx context.Context, name string) (context.Context
 // Поэтому даём Hysteria2 обычный UDP-сокет, но со счётчиками, и раз в
 // несколько секунд печатаем их, пока ответа нет.
 
+// hyMeter — общий счётчик байт через сокет Hysteria2. Один на клиент:
+// сессия может пересоздаваться (см. супервизор в hyauto.go), а измеритель
+// скорости и контроллер полосы должны видеть непрерывную картину.
+type hyMeter struct {
+	sentBytes atomic.Int64
+	recvBytes atomic.Int64
+
+	mu       sync.Mutex
+	lastAt   time.Time
+	lastSent int64
+	lastRecv int64
+}
+
+var globalHyMeter = &hyMeter{}
+
+// sample отдаёт скорость (бит/с) с прошлого вызова. Первый вызов задаёт
+// точку отсчёта и возвращает нули.
+func (m *hyMeter) sample() (upBps, downBps float64) {
+	sent := m.sentBytes.Load()
+	recv := m.recvBytes.Load()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	if m.lastAt.IsZero() {
+		m.lastAt, m.lastSent, m.lastRecv = now, sent, recv
+		return 0, 0
+	}
+	elapsed := now.Sub(m.lastAt).Seconds()
+	if elapsed <= 0 {
+		return 0, 0
+	}
+	upBps = float64(sent-m.lastSent) * 8 / elapsed
+	downBps = float64(recv-m.lastRecv) * 8 / elapsed
+	m.lastAt, m.lastSent, m.lastRecv = now, sent, recv
+	return upBps, downBps
+}
+
 type countingPacketConn struct {
 	net.PacketConn
 	sentPkts  atomic.Int64
@@ -68,6 +108,7 @@ func (c *countingPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	n := int64(len(p))
 	c.sentPkts.Add(1)
 	c.sentBytes.Add(n)
+	globalHyMeter.sentBytes.Add(n)
 	for {
 		cur := c.maxSent.Load()
 		if n <= cur || c.maxSent.CompareAndSwap(cur, n) {
@@ -82,6 +123,7 @@ func (c *countingPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	if err == nil {
 		c.recvPkts.Add(1)
 		c.recvBytes.Add(int64(n))
+		globalHyMeter.recvBytes.Add(int64(n))
 	}
 	return n, addr, err
 }
@@ -180,7 +222,7 @@ func newHysteriaClient(p HysteriaParams) (hyclient.Client, error) {
 // hysteriaDial отдаёт go-socks5 диалер, который уводит соединения в QUIC.
 // Если резолвер положил в контекст доменное имя — идём по имени, чтобы DNS
 // разрешался на выходной ноде.
-func hysteriaDial(c hyclient.Client) func(ctx context.Context, network, addr string) (net.Conn, error) {
+func hysteriaDial(holder *hyClientHolder) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		if network != "tcp" && network != "tcp4" && network != "tcp6" {
 			return nil, fmt.Errorf("hysteria: неподдерживаемая сеть %q", network)
@@ -191,29 +233,33 @@ func hysteriaDial(c hyclient.Client) func(ctx context.Context, network, addr str
 				target = net.JoinHostPort(name, port)
 			}
 		}
-		return c.TCP(target)
+		// Клиент берём на каждый вызов, а не один раз при создании сервера:
+		// сессия пересоздаётся при смене полосы, и SOCKS должен уходить уже
+		// в новую.
+		c := holder.wait(ctx, 20*time.Second)
+		if c == nil {
+			return nil, fmt.Errorf("hysteria: сессия ещё не поднялась")
+		}
+		conn, err := c.TCP(target)
+		if err != nil && isHyClosed(err) {
+			holder.markDead()
+		}
+		return conn, err
 	}
+}
+
+// isHyClosed отличает «сессия умерла» от «адрес недоступен»: в первом случае
+// нужна новая сессия, во втором — ничего, это обычный отказ соединения.
+func isHyClosed(err error) bool {
+	var closed hyerrs.ClosedError
+	return errors.As(err, &closed)
 }
 
 // runHysteriaSocks поднимает локальный SOCKS5, который ходит наружу через
 // Hysteria2. Возвращается, когда ctx отменён.
-func runHysteriaSocks(ctx context.Context, p HysteriaParams, socksAddr string, authEnabled bool, username, password string, holder *hyClientHolder) error {
-	c, err := newHysteriaClient(p)
-	if err != nil {
-		return err
-	}
-	defer c.Close()
-	context.AfterFunc(ctx, func() { _ = c.Close() })
-
-	// Тот же клиент обслуживает и системный VPN (см. hytun.go): сессия одна,
-	// незачем держать вторую.
-	if holder != nil {
-		holder.set(c)
-		defer holder.set(nil)
-	}
-
+func runHysteriaSocks(ctx context.Context, socksAddr string, authEnabled bool, username, password string, holder *hyClientHolder) error {
 	conf := &socks5.Config{
-		Dial:     hysteriaDial(c),
+		Dial:     hysteriaDial(holder),
 		Resolver: remoteResolver{},
 		Logger:   log.New(io.Writer(socksLogFilter{}), "", 0),
 	}
@@ -232,7 +278,7 @@ func runHysteriaSocks(ctx context.Context, p HysteriaParams, socksAddr string, a
 	defer ln.Close()
 	context.AfterFunc(ctx, func() { _ = ln.Close() })
 
-	log.Printf("[HY2] SOCKS5 на %s → Hysteria2 %s (SNI=%s, insecure=%v)", socksAddr, p.ServerAddr, p.SNI, p.Insecure)
+	log.Printf("[HY2] SOCKS5 на %s → Hysteria2", socksAddr)
 
 	for {
 		conn, err := ln.Accept()

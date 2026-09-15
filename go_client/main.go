@@ -183,6 +183,7 @@ func main() {
 	hy2Insecure := flag.Bool("hy2-insecure", true, "не проверять сертификат Hysteria2 (деплой ставит самоподписанный)")
 	hy2Up := flag.Uint64("hy2-up", 0, "полоса вверх, Мбит/с; 0 = BBR, >0 включает Brutal")
 	hy2Down := flag.Uint64("hy2-down", 0, "полоса вниз, Мбит/с; 0 = BBR, >0 включает Brutal")
+	hy2Auto := flag.Bool("hy2-auto", false, "автоподбор полосы Brutal по замерам RTT/потерь/скорости (перебивает -hy2-up/-hy2-down)")
 	socksAddr := flag.String("socks", "127.0.0.1:1080", "локальный SOCKS5 (для -mode socks и -mode hysteria)")
 	socksAuth := flag.Bool("socks-auth", false, "требовать логин и пароль SOCKS5")
 	socksUser := flag.String("socks-user", "", "логин SOCKS5")
@@ -492,10 +493,13 @@ func main() {
 			DownMbps:   *hy2Down,
 		}
 		hyHolder := &hyClientHolder{}
+		// Супервизор держит сессию Hysteria2 и, при -hy2-auto, сам
+		// пересматривает полосу Brutal по замерам (см. hyauto.go).
+		go runHysteriaSupervisor(ctx, hyParams, hyHolder, *hy2Auto)
 		go func() {
 			for ctx.Err() == nil {
-				if err := runHysteriaSocks(ctx, hyParams, *socksAddr, *socksAuth, *socksUser, *socksPass, hyHolder); err != nil {
-					log.Printf("[HY2] %v — повтор через 3с", err)
+				if err := runHysteriaSocks(ctx, *socksAddr, *socksAuth, *socksUser, *socksPass, hyHolder); err != nil {
+					log.Printf("[HY2] SOCKS5: %v — повтор через 3с", err)
 				}
 				select {
 				case <-ctx.Done():

@@ -597,8 +597,11 @@ object TunnelManager {
                         cmd.add(socks)
                         cmd.add("-hy2-pass")
                         cmd.add(params.connectionPassword)
-                        // Ненулевые полосы включают на сервере Brutal вместо BBR.
-                        if (params.hy2UpMbps > 0 || params.hy2DownMbps > 0) {
+                        // Автоподбор сам выставляет полосу и пересматривает её на
+                        // ходу, поэтому ручные значения при нём не передаём.
+                        if (params.hy2AutoBandwidth) {
+                            cmd.add("-hy2-auto")
+                        } else if (params.hy2UpMbps > 0 || params.hy2DownMbps > 0) {
                             cmd.add("-hy2-up")
                             cmd.add(params.hy2UpMbps.toString())
                             cmd.add("-hy2-down")
@@ -618,10 +621,11 @@ object TunnelManager {
                             cmd.add(params.socksPassword)
                         }
                         val authLabel = if (params.socksAuthEnabled) ", с авторизацией" else ""
-                        val ccLabel = if (params.hy2UpMbps > 0 || params.hy2DownMbps > 0) {
-                            "Brutal ↑${params.hy2UpMbps}/↓${params.hy2DownMbps} Мбит/с"
-                        } else {
-                            "BBR"
+                        val ccLabel = when {
+                            params.hy2AutoBandwidth -> "Brutal с автоподбором полосы"
+                            params.hy2UpMbps > 0 || params.hy2DownMbps > 0 ->
+                                "Brutal ↑${params.hy2UpMbps}/↓${params.hy2DownMbps} Мбит/с"
+                            else -> "BBR"
                         }
                         updateLog("conn_mode", "[СЕТЬ] Режим: Hysteria2, $ccLabel (VPN на всё устройство; SOCKS5 $socks$authLabel)", 1, false)
                     }
@@ -826,6 +830,19 @@ object TunnelManager {
 
                     // SOCKS IPv6: туннель только IPv4 — клиент сам уйдёт на A-запись.
                     if (isBenignSocksIpv6Noise(lineTrim)) {
+                        return@forEachLine
+                    }
+
+                    // Скорость и текущая полоса: обновляем на месте, отдельными
+                    // строками, чтобы их было видно, не листая лог.
+                    if (lineTrim.startsWith("[HY2] Скорость:")) {
+                        updateLog("hy2_speed", lineTrim, 2, false)
+                        return@forEachLine
+                    }
+                    if (lineTrim.startsWith("[HY2] Полоса:") ||
+                        lineTrim.startsWith("[HY2] Автоподбор")
+                    ) {
+                        updateLog("hy2_bandwidth", lineTrim, 2, false)
                         return@forEachLine
                     }
 
@@ -2299,6 +2316,8 @@ data class TunnelParams(
     /** Hysteria2: полосы в Мбит/с. Обе нулевые = BBR, ненулевые включают Brutal. */
     val hy2UpMbps: Int = 0,
     val hy2DownMbps: Int = 0,
+    /** Автоподбор полосы Brutal по замерам пути (перебивает две строки выше). */
+    val hy2AutoBandwidth: Boolean = false,
     /** Адаптивная ИИ-маскировка (aiobfs) вместо статичной RTP-обфускации; нужен сервер с -ai-listen. */
     val aiObfs: Boolean = false,
     val detailedLogs: Boolean = false
