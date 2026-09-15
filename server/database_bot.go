@@ -480,6 +480,21 @@ func (s *wrapKeyStore) Count() int {
 	return len(s.entries)
 }
 
+// KeyEntries отдаёт копии всех действующих WRAP-ключей вместе с их
+// идентификаторами ("pass:<хеш пароля>"). Идентификатор нужен, чтобы
+// зарегистрировать привязку соединения к паролю (wrapCredentialBindings):
+// без неё сервер отвечает DENIED:wrong_password на GETCONF, даже если сам
+// трафик расшифровался — см. connectionCredentialMatches.
+func (s *wrapKeyStore) KeyEntries() []wrapKeyEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]wrapKeyEntry, len(s.entries))
+	for i, entry := range s.entries {
+		out[i] = wrapKeyEntry{id: entry.id, key: append([]byte(nil), entry.key...)}
+	}
+	return out
+}
+
 // Keys отдаёт копии всех действующих WRAP-ключей. Нужен адаптивной
 // ИИ-маскировке (см. server_ai.go): её слушатель подбирает ключ сам через
 // aiobfs.TryUnwrap, а не через Unwrap этого хранилища — формат на проводе у

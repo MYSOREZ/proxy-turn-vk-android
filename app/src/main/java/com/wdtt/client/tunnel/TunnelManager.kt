@@ -510,12 +510,17 @@ object TunnelManager {
 
                 cmd.add("-obfs")
                 cmd.add(SettingsStore.normalizeObfsMode(params.obfsMode))
-                updateLog(
-                    "obfs_mode",
-                    "[СЕТЬ] Маскировка: ${SettingsStore.obfsModeDisplay(params.obfsMode)}",
-                    1,
-                    false
-                )
+                // При включённой ИИ-маскировке статичный профиль не работает —
+                // строку про «Аудиозвонок (OPUS)» не показываем, чтобы в логе
+                // не значились сразу две маскировки.
+                if (!params.aiObfs) {
+                    updateLog(
+                        "obfs_mode",
+                        "[СЕТЬ] Маскировка: ${SettingsStore.obfsModeDisplay(params.obfsMode)}",
+                        1,
+                        false
+                    )
+                }
 
                 if (params.noDtls) {
                     cmd.add("-notls")

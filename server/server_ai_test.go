@@ -207,3 +207,60 @@ func TestWrapKeyStoreKeysReturnsIndependentCopies(t *testing.T) {
 		t.Fatalf("Keys() did not return an independent copy — mutating the returned slice affected the store")
 	}
 }
+
+// TestAioWrapPacketConnBindsCredential — регрессия на DENIED:wrong_password.
+//
+// Расшифровать трафик мало: сервер отдельно сверяет пароль из GETCONF с тем,
+// которым расшифровалось соединение (connectionCredentialMatches смотрит в
+// wrapCredentialBindings). Слушатель ИИ-маскировки эту привязку не
+// регистрировал — трафик проходил, DTLS вставал, а на GETCONF сервер отвечал
+// "неверный пароль". Тест проверяет, что привязка появляется после успешного
+// подбора ключа и снимается при закрытии.
+func TestAioWrapPacketConnBindsCredential(t *testing.T) {
+	const password = "binding-test-password"
+	withTestPassword(t, password)
+
+	derivedKey, err := deriveWrapKey(password)
+	if err != nil {
+		t.Fatalf("deriveWrapKey: %v", err)
+	}
+	clientShaper, err := aiobfs.New(aiobfs.Config{Key: derivedKey})
+	if err != nil {
+		t.Fatalf("aiobfs.New: %v", err)
+	}
+
+	peerAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 23456}
+	fake := newFakePacketConn(peerAddr)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	conn := &aioWrapPacketConn{ctx: ctx, inner: fake}
+
+	wire, err := clientShaper.Wrap([]byte("hello"))
+	if err != nil {
+		t.Fatalf("client Wrap: %v", err)
+	}
+	fake.push(wire)
+	buf := make([]byte, 2048)
+	if _, _, err := conn.ReadFrom(buf); err != nil {
+		t.Fatalf("ReadFrom: %v", err)
+	}
+
+	if conn.bindingID == "" {
+		t.Fatalf("привязка не зарегистрирована: сервер ответит DENIED:wrong_password")
+	}
+	value, ok := wrapCredentialBindings.Load(conn.bindingID)
+	if !ok {
+		t.Fatalf("wrapCredentialBindings пуст для %q", conn.bindingID)
+	}
+	if want := "pass:" + wrapKeyID(password); value != want {
+		t.Fatalf("привязка = %v, ожидалось %q", value, want)
+	}
+
+	bindingID := conn.bindingID
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, ok := wrapCredentialBindings.Load(bindingID); ok {
+		t.Fatalf("привязка осталась после Close")
+	}
+}

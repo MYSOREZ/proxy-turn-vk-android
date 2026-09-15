@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -127,6 +128,45 @@ type aioWrapPacketConn struct {
 	shaper    *aiobfs.Shaper
 	remoteFor net.Addr // set once selected, for RunAutonomous's send func
 	stopAuto  func()
+	// bindingID: под этим ключом в wrapCredentialBindings лежит
+	// идентификатор пароля, которым расшифровалось соединение. Сервер
+	// сверяет с ним пароль из GETCONF (connectionCredentialMatches) — без
+	// записи он отвечает DENIED:wrong_password, хотя трафик расшифровался.
+	bindingID string
+}
+
+// aiTryUnwrapKeyed — как aiobfs.TryUnwrap, но дополнительно возвращает
+// идентификатор подошедшего пароля, чтобы зарегистрировать привязку
+// соединения (см. bindingID).
+func aiTryUnwrapKeyed(raw []byte) (key []byte, keyID string, payload []byte, isDecoy bool, err error) {
+	entries := serverWrapKeys.KeyEntries()
+	keys := make([][]byte, len(entries))
+	for i, entry := range entries {
+		keys[i] = entry.key
+	}
+	key, payload, isDecoy, err = aiobfs.TryUnwrap(keys, raw)
+	if err != nil {
+		return nil, "", nil, false, err
+	}
+	for _, entry := range entries {
+		if bytes.Equal(entry.key, key) {
+			keyID = entry.id
+			break
+		}
+	}
+	return key, keyID, payload, isDecoy, nil
+}
+
+// bindCredential связывает соединение с паролем, которым оно расшифровалось.
+func (c *aioWrapPacketConn) bindCredential(keyID string, addr net.Addr) {
+	if keyID == "" || addr == nil {
+		return
+	}
+	if c.bindingID != "" {
+		wrapCredentialBindings.Delete(c.bindingID)
+	}
+	c.bindingID = wrapConnectionBindingID(c.LocalAddr(), addr)
+	wrapCredentialBindings.Store(c.bindingID, keyID)
 }
 
 func (c *aioWrapPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
@@ -139,7 +179,7 @@ func (c *aioWrapPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 		raw := buf[:n]
 
 		if atomic.LoadInt32(&c.selected) == 0 {
-			key, payload, isDecoy, uErr := aiobfs.TryUnwrap(serverWrapKeys.Keys(), raw)
+			key, keyID, payload, isDecoy, uErr := aiTryUnwrapKeyed(raw)
 			if uErr != nil {
 				if atomic.CompareAndSwapInt32(&c.authLog, 0, 1) {
 					log.Printf("[AI-WRAP] Отказ: AEAD auth failed from %s (keys=%d)", addr.String(), serverWrapKeys.Count())
@@ -152,6 +192,7 @@ func (c *aioWrapPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 			}
 			c.shaper = shaper
 			c.remoteFor = addr
+			c.bindCredential(keyID, addr)
 			atomic.StoreInt32(&c.selected, 1)
 			c.stopAuto = shaper.RunAutonomous(c.ctx, func(wire []byte) error {
 				_, werr := c.inner.WriteTo(wire, c.remoteFor)
@@ -173,7 +214,7 @@ func (c *aioWrapPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 		if uErr != nil {
 			// Password may have rotated: re-verify across all active keys,
 			// same fallback the legacy -listen path has.
-			key, payload2, isDecoy2, uErr2 := aiobfs.TryUnwrap(serverWrapKeys.Keys(), raw)
+			key, keyID, payload2, isDecoy2, uErr2 := aiTryUnwrapKeyed(raw)
 			if uErr2 != nil {
 				return 0, addr, fmt.Errorf("ai-wrap unwrap: %w", uErr)
 			}
@@ -185,6 +226,7 @@ func (c *aioWrapPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 				c.stopAuto()
 			}
 			c.shaper = shaper
+			c.bindCredential(keyID, addr)
 			c.stopAuto = shaper.RunAutonomous(c.ctx, func(wire []byte) error {
 				_, werr := c.inner.WriteTo(wire, c.remoteFor)
 				return werr
@@ -223,6 +265,10 @@ func (c *aioWrapPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 func (c *aioWrapPacketConn) Close() error {
 	if c.stopAuto != nil {
 		c.stopAuto()
+	}
+	if c.bindingID != "" {
+		wrapCredentialBindings.Delete(c.bindingID)
+		c.bindingID = ""
 	}
 	return c.inner.Close()
 }
