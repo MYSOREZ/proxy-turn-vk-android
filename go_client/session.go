@@ -336,6 +336,13 @@ func RunSession(
 			if err != nil {
 				return false, fmt.Errorf("aiobfs init: %w", err)
 			}
+			// Память: поднимаем выученное в этой сети, чтобы не перебирать
+			// заново профили, которые здесь заведомо душатся.
+			globalAIState.restore(shaper)
+			// И даём обучению видеть скорость: без этого награда зависела
+			// только от RTT и потерь, то есть «тихий, но медленный» профиль
+			// выглядел для него лучше быстрого.
+			shaper.SetThroughputProvider(stats.CurrentBps)
 			// Самостоятельные замеры RTT/потерь: шейпер сам шлёт пробы и по
 			// ответам решает, какой профиль маскировки сейчас выгоднее.
 			stopAuto := shaper.RunAutonomous(sessCtx, func(wire []byte) error {
@@ -343,6 +350,27 @@ func RunSession(
 				return werr
 			}, aiObfsAutonomousInterval)
 			defer stopAuto()
+
+			// Запись памяти ведёт одна сессия: шейпер у каждой свой, а файл
+			// общий, и девять писателей просто затирали бы друг друга.
+			if globalAIState.claimOwnership() {
+				go func() {
+					ticker := time.NewTicker(aiStateSaveInterval)
+					defer ticker.Stop()
+					defer globalAIState.releaseOwnership()
+					for {
+						select {
+						case <-sessCtx.Done():
+							// Сохраняем на выходе: самое свежее знание —
+							// как раз перед разрывом.
+							globalAIState.persist(shaper)
+							return
+						case <-ticker.C:
+							globalAIState.persist(shaper)
+						}
+					}
+				}()
+			}
 
 			// Эти же замеры нужны контроллеру полосы Hysteria2 (hyauto.go):
 			// шейпер живёт в каждой сессии, а полосу подбирает один

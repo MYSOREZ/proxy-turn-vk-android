@@ -21,6 +21,11 @@ const (
 	markerProbe byte = 0x02 // "please pong this ID back" — see autonomous.go
 	markerPong  byte = 0x03 // "here is your ID back" — see autonomous.go
 
+	// Затухание лучшей наблюдавшейся скорости: канал мог стать медленнее,
+	// и держаться за рекорд прошлой недели значит вечно считать текущую
+	// скорость плохой.
+	bestThroughputDecay = 0.995
+
 	autoStaleProbe = 3 * time.Second // how long an un-ponged probe counts as still-pending before drainAutoStats treats it as lost
 
 	defaultMinDwell     = 4 * time.Second
@@ -94,6 +99,12 @@ type Shaper struct {
 	policy   *policyNet
 	minDwell time.Duration
 	target   float64
+	// bestThroughput — лучшая наблюдавшаяся скорость с затуханием. Нужна,
+	// когда абсолютная цель не задана: у каждого канала своя скорость, а
+	// сравнивать «быстрее обычного» можно везде.
+	bestThroughput float64
+	// throughputFn — источник фактической скорости для RunAutonomous.
+	throughputFn func() float64
 
 	currentIdx int32 // atomic index into profiles
 
@@ -433,13 +444,29 @@ func openFrame(aead cipher.AEAD, header, ciphertext []byte) (marker byte, payloa
 func (s *Shaper) Observe(rttMs, lossRate, throughputBps float64) bool {
 	rttNorm := clamp01(rttMs / 300.0)
 	lossNorm := clamp01(lossRate)
-	throughputNorm := 0.5
-	if s.target > 0 {
-		throughputNorm = clamp01(throughputBps / s.target)
-	}
-
 	s.learnMu.Lock()
 	defer s.learnMu.Unlock()
+
+	// Нормировка скорости. С заданной целью — по ней. Без цели раньше
+	// подставлялась константа 0.5, то есть член награды за скорость был
+	// одинаков для всех профилей и обучение скорость просто НЕ ВИДЕЛО.
+	// Теперь нормируем по лучшей наблюдавшейся скорости с затуханием:
+	// абсолютная цифра у каждого канала своя, а «быстрее обычного» —
+	// сигнал универсальный.
+	throughputNorm := 0.5
+	switch {
+	case s.target > 0:
+		throughputNorm = clamp01(throughputBps / s.target)
+	case throughputBps > 0:
+		if throughputBps > s.bestThroughput {
+			s.bestThroughput = throughputBps
+		} else {
+			s.bestThroughput *= bestThroughputDecay
+		}
+		if s.bestThroughput > 0 {
+			throughputNorm = clamp01(throughputBps / s.bestThroughput)
+		}
+	}
 
 	now := time.Now()
 	dwellNorm := clamp01(now.Sub(s.lastSwitch).Seconds() / s.minDwell.Seconds())
@@ -478,6 +505,26 @@ func (s *Shaper) Observe(rttMs, lossRate, throughputBps float64) bool {
 	s.haveRound = true
 
 	return switched
+}
+
+// SetThroughputProvider задаёт источник фактической скорости (бит/с), который
+// RunAutonomous будет опрашивать при каждом замере. Без него обучение не
+// видит скорость вовсе и оптимизирует только RTT и потери — то есть может
+// предпочесть профиль, который «тихий», но медленный.
+func (s *Shaper) SetThroughputProvider(fn func() float64) {
+	s.learnMu.Lock()
+	s.throughputFn = fn
+	s.learnMu.Unlock()
+}
+
+func (s *Shaper) currentThroughput() float64 {
+	s.learnMu.Lock()
+	fn := s.throughputFn
+	s.learnMu.Unlock()
+	if fn == nil {
+		return 0
+	}
+	return fn()
 }
 
 // Stats reports current learner state, useful for logging/telemetry.

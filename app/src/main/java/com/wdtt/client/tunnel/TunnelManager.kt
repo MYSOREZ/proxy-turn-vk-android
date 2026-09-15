@@ -540,6 +540,14 @@ object TunnelManager {
                 // слушатель -ai-listen (порт уже подставлен в peer).
                 if (params.aiObfs) {
                     cmd.add("-ai-obfs")
+                    // Память обучения: каталог внутри приложения + метка сети.
+                    // Без метки опыт разных сетей смешивался бы, а фильтрация
+                    // у соты и домашнего Wi-Fi разная.
+                    val aiStateDir = java.io.File(context.filesDir, "aiobfs")
+                    cmd.add("-ai-state")
+                    cmd.add(aiStateDir.absolutePath)
+                    cmd.add("-ai-net-tag")
+                    cmd.add(NetworkTag.current(context))
                     updateLog(
                         "ai_obfs",
                         "[СЕТЬ] Маскировка: адаптивная (профили + онлайн-обучение), эксперимент",

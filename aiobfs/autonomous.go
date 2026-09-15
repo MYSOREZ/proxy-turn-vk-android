@@ -214,7 +214,7 @@ func (s *Shaper) RunAutonomous(ctx context.Context, send func(wire []byte) error
 				}
 			case <-evalTicker.C:
 				rttMs, lossRate := s.drainAutoStats()
-				s.Observe(rttMs, lossRate, 0)
+				s.Observe(rttMs, lossRate, s.currentThroughput())
 			}
 		}
 	}()

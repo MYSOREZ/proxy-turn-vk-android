@@ -175,12 +175,21 @@ func WorkerGroup(
 
 				quotaRetry := false
 				fastRetry := false
+				transientNetRetry := false
 				if getConf {
 					if configDelivered {
 						atomic.StoreInt32(&configSent, 1)
 					} else {
 						atomic.StoreInt32(&configRequestInFlight, 0)
 					}
+				}
+
+				if sessErr == nil {
+					// Сессия отработала штатно — обнуляем счётчик попыток,
+					// иначе нарастающая пауза копилась бы за всё время жизни
+					// воркера и после одной ночной паузы он возвращался бы
+					// минутами вместо секунд.
+					attempt = 0
 				}
 
 				if sessErr != nil {
@@ -232,13 +241,23 @@ func WorkerGroup(
 						log.Printf("[ВОРКЕР #%d] Ошибка (попытка %d): %s", wid, attempt, errStr)
 					}
 
-					// Если ошибка STUN (credentials invalid), воркер не сможет переподключиться. Завершаем.
-					isStunDeath := strings.Contains(errStrLower, "error 29") ||
-						strings.Contains(errStrLower, "cannot create socket")
-
-					if isStunDeath {
-						log.Printf("[ВОРКЕР #%d] Невосстановимая TURN/STUN ошибка, завершение: %s", wid, errStr)
-						return
+					// Раньше "cannot create socket" и "error 29" считались
+					// невосстановимыми, и воркер выходил из цикла НАВСЕГДА. На
+					// телефоне это неверно: обе ошибки транзиентные.
+					//
+					// Во время дозы Android и при смене сети создание сокета
+					// отказывает, потому что у процесса в этот момент нет сети,
+					// а не потому, что что-то сломано насовсем. Воркер, поймавший
+					// такой момент, больше не поднимался — отсюда в логах 6 из 9
+					// и 8 из 9 активных после серии пробуждений, то есть потеря
+					// трети пропускной способности релея до перезапуска туннеля.
+					//
+					// Теперь такие ошибки уводят воркера в длинную паузу с
+					// нарастанием, но не убивают: проснулся телефон — воркер
+					// вернулся сам.
+					if isTransientNetworkError(errStrLower) {
+						transientNetRetry = true
+						log.Printf("[ВОРКЕР #%d] Сеть недоступна (попытка %d), ждём и повторяем: %s", wid, attempt, errStr)
 					}
 				}
 
@@ -247,10 +266,17 @@ func WorkerGroup(
 				}
 
 				retryDelay := time.Duration(5+rand.Intn(11)) * time.Second
-				if quotaRetry {
+				switch {
+				case quotaRetry:
 					retryDelay = time.Duration(30+rand.Intn(31)) * time.Second
-				} else if fastRetry {
+				case fastRetry:
 					retryDelay = time.Duration(1+rand.Intn(3)) * time.Second
+				case transientNetRetry:
+					// Нарастающая пауза: телефон может спать долго, и долбиться
+					// в отсутствующую сеть каждые 10 секунд — это только расход
+					// батареи. Потолок в 5 минут, чтобы после пробуждения
+					// воркер вернулся за разумное время.
+					retryDelay = transientBackoff(attempt)
 				}
 				select {
 				case <-time.After(retryDelay):
@@ -338,4 +364,43 @@ type Credentials struct {
 	Pass          string
 	TurnURLs      []string
 	CacheStreamID int
+}
+
+// transientBackoff — пауза перед повтором, когда у процесса просто нет сети
+// (доза Android, переключение между сотами и Wi-Fi). Нарастает, чтобы не
+// жечь батарею стуком в пустоту, но упирается в потолок, чтобы после
+// пробуждения воркер вернулся за разумное время, а не через полчаса.
+func transientBackoff(attempt int) time.Duration {
+	const (
+		base = 15 * time.Second
+		max  = 5 * time.Minute
+	)
+	d := base
+	for i := 1; i < attempt && d < max; i++ {
+		d *= 2
+	}
+	if d > max {
+		d = max
+	}
+	// Разброс, чтобы девять воркеров не ломились в сеть одной секундой.
+	return d + time.Duration(rand.Intn(5000))*time.Millisecond
+}
+
+// isTransientNetworkError отличает «у процесса сейчас нет сети» от настоящей
+// поломки. Такие ошибки приходят во время дозы Android и при переключении
+// между сотами и Wi-Fi: сокет не создаётся, потому что сети нет, а не потому
+// что что-то сломалось насовсем.
+func isTransientNetworkError(errStrLower string) bool {
+	for _, marker := range []string{
+		"cannot create socket",
+		"network is unreachable",
+		"operation not permitted",
+		"no route to host",
+		"error 29",
+	} {
+		if strings.Contains(errStrLower, marker) {
+			return true
+		}
+	}
+	return false
 }

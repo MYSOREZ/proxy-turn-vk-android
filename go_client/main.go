@@ -192,6 +192,8 @@ func main() {
 	turnTCP := flag.Bool("turn-tcp", false, "соединяться с TURN-relay по TCP вместо UDP (обход UDP-душения на некоторых сетях, напр. Ростелеком)")
 	tunFdSock := flag.String("tun-fd-sock", "", "unix-сокет для получения TUN fd от Android (режимы rawtun и hysteria)")
 	aiObfs := flag.Bool("ai-obfs", false, "адаптивная ИИ-маскировка вместо статичной (нужен сервер с -ai-listen, peer должен указывать на его порт)")
+	aiStateDir := flag.String("ai-state", "", "каталог памяти адаптивной маскировки; пусто = не запоминать между запусками")
+	aiNetTag := flag.String("ai-net-tag", "", "метка сети для памяти (у разных сетей разные фильтры, опыт не смешиваем)")
 
 	flag.Parse()
 	activeConnMode := strings.ToLower(strings.TrimSpace(*connMode))
@@ -208,6 +210,9 @@ func main() {
 		if len([]byte(*socksUser)) > 255 || len([]byte(*socksPass)) > 255 {
 			log.Fatal("[SOCKS] Логин и пароль должны быть не длиннее 255 байт")
 		}
+	}
+	if *aiObfs {
+		initAIState(*aiStateDir, *aiNetTag)
 	}
 	setupGlobalResolver(*goDNS)
 	activeCaptchaMode := setCaptchaMode(*captchaMode)
