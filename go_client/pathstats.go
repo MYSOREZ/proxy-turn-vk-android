@@ -20,9 +20,11 @@ import (
 const pathStatsTTL = 20 * time.Second
 
 type pathSample struct {
-	rttMs float64
-	loss  float64
-	at    time.Time
+	rttMs   float64
+	haveRTT bool
+	sent    int
+	ponged  int
+	at      time.Time
 }
 
 type pathMonitor struct {
@@ -33,9 +35,15 @@ type pathMonitor struct {
 var globalPath = &pathMonitor{samples: make(map[int]pathSample)}
 
 // report кладёт свежий замер от сессии sessionID.
-func (m *pathMonitor) report(sessionID int, rttMs, loss float64) {
+func (m *pathMonitor) report(sessionID int, rttMs float64, haveRTT bool, sent, ponged int) {
 	m.mu.Lock()
-	m.samples[sessionID] = pathSample{rttMs: rttMs, loss: loss, at: time.Now()}
+	m.samples[sessionID] = pathSample{
+		rttMs:   rttMs,
+		haveRTT: haveRTT,
+		sent:    sent,
+		ponged:  ponged,
+		at:      time.Now(),
+	}
 	m.mu.Unlock()
 }
 
@@ -47,26 +55,54 @@ func (m *pathMonitor) forget(sessionID int) {
 	m.mu.Unlock()
 }
 
-// snapshot отдаёт медианные RTT и потери по живым сессиям.
-func (m *pathMonitor) snapshot() (rttMs, loss float64, ok bool) {
+// pathSnapshot — сводка по живым сессиям.
+type pathSnapshot struct {
+	rttMs    float64 // медиана по сессиям, где RTT реально измерялся
+	haveRTT  bool
+	loss     float64 // суммарная доля потерь проб
+	probes   int     // сколько проб суммарно ушло за окно
+	sessions int
+}
+
+// snapshot складывает замеры всех живых сессий.
+//
+// RTT — медиана: одна залипшая сессия не должна тянуть картину. Потери —
+// именно СУММА счётчиков, а не медиана долей: в окне у сессии всего четыре
+// пробы, доля квантуется шагом 25%, и медиана таких долей — это шум, а не
+// измерение. Сумма по девяти сессиям даёт около 36 проб, то есть шаг ~3%.
+func (m *pathMonitor) snapshot() pathSnapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	cutoff := time.Now().Add(-pathStatsTTL)
 	rtts := make([]float64, 0, len(m.samples))
-	losses := make([]float64, 0, len(m.samples))
+	totalSent, totalPonged := 0, 0
+	sessions := 0
 	for id, s := range m.samples {
 		if s.at.Before(cutoff) {
 			delete(m.samples, id)
 			continue
 		}
-		rtts = append(rtts, s.rttMs)
-		losses = append(losses, s.loss)
+		sessions++
+		totalSent += s.sent
+		totalPonged += s.ponged
+		if s.haveRTT {
+			rtts = append(rtts, s.rttMs)
+		}
 	}
-	if len(rtts) == 0 {
-		return 0, 0, false
+
+	snap := pathSnapshot{probes: totalSent, sessions: sessions}
+	if len(rtts) > 0 {
+		snap.rttMs = median(rtts)
+		snap.haveRTT = true
 	}
-	return median(rtts), median(losses), true
+	if totalSent > 0 {
+		snap.loss = 1 - float64(totalPonged)/float64(totalSent)
+		if snap.loss < 0 {
+			snap.loss = 0
+		}
+	}
+	return snap
 }
 
 func median(v []float64) float64 {

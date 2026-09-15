@@ -23,22 +23,102 @@ func TestControllerRaisesWhenSaturated(t *testing.T) {
 	}
 }
 
-// Потери выше порога — режем, даже если канал выбирается полностью.
-func TestControllerCutsOnLoss(t *testing.T) {
+// Устойчивые большие потери при активной отдаче — режем.
+func TestControllerCutsOnSustainedLoss(t *testing.T) {
 	c := newBandwidthController()
 	now := time.Now()
-	c.downMbps = 60
-	c.appliedDown = 60
+	c.downMbps, c.appliedDown = 60, 60
 
-	d := c.step(now, pathObservation{
-		downBps: mbps(55),
-		rttMs:   60, loss: 0.08, haveRTT: true,
-	})
-	if d.downMbps >= 60 {
-		t.Fatalf("полоса не снижена при потерях 8%%: %.1f", d.downMbps)
+	var d decision
+	for i := 0; i < 4; i++ {
+		d = c.step(now.Add(time.Duration(i)*autoEvalInterval), pathObservation{
+			downBps: mbps(30), // половина полосы: шлём, но не упёрлись
+			rttMs:   60, haveRTT: true,
+			loss: 0.45, probes: 36,
+		})
 	}
-	if !d.apply {
-		t.Fatalf("снижение на 30%% должно применяться сразу, а не копиться")
+	if d.downMbps >= 60 {
+		t.Fatalf("полоса не снижена при устойчивых потерях 45%%: %.1f", d.downMbps)
+	}
+}
+
+// Умеренные потери по пробам — не повод резать.
+//
+// Ровно это и случилось в бою: 12.5% потерь ПРОБ при живом туннеле и 50 МБ
+// переданных данных уронили полосу до 4/10 Мбит/с. Пробы — мелкие пакеты,
+// релей режет их охотнее полезных, а ответ на границе окна засчитывается как
+// потеря.
+func TestControllerIgnoresProbeNoise(t *testing.T) {
+	c := newBandwidthController()
+	now := time.Now()
+	c.downMbps, c.appliedDown = 60, 60
+
+	for i := 0; i < 5; i++ {
+		d := c.step(now.Add(time.Duration(i)*autoEvalInterval), pathObservation{
+			downBps: mbps(30),
+			rttMs:   60, haveRTT: true,
+			loss: 0.125, probes: 36,
+		})
+		if d.downMbps < 60 {
+			t.Fatalf("полоса снижена по шуму измерения (12.5%% потерь проб): %.1f", d.downMbps)
+		}
+	}
+}
+
+// Проб слишком мало — доля потерь ничего не значит, судить по ней нельзя.
+func TestControllerIgnoresLossFromTooFewProbes(t *testing.T) {
+	c := newBandwidthController()
+	now := time.Now()
+	c.downMbps, c.appliedDown = 60, 60
+
+	for i := 0; i < 5; i++ {
+		d := c.step(now.Add(time.Duration(i)*autoEvalInterval), pathObservation{
+			downBps: mbps(30),
+			rttMs:   60, haveRTT: true,
+			loss: 0.75, probes: 4, // одна сессия: шаг измерения 25%
+		})
+		if d.downMbps < 60 {
+			t.Fatalf("полоса снижена по четырём пробам: %.1f", d.downMbps)
+		}
+	}
+}
+
+// Мы почти не шлём — значит перегрузка не наша, и резать наш потолок нечего.
+// Так выглядит переподключение воркеров: потери есть, трафика нет.
+func TestControllerIgnoresCongestionWhenNotDriving(t *testing.T) {
+	c := newBandwidthController()
+	now := time.Now()
+	c.downMbps, c.appliedDown = 60, 60
+
+	for i := 0; i < 5; i++ {
+		d := c.step(now.Add(time.Duration(i)*autoEvalInterval), pathObservation{
+			downBps: mbps(2), // 3% от установленной полосы
+			rttMs:   900, haveRTT: true,
+			loss: 0.6, probes: 36,
+		})
+		if d.downMbps < 60 {
+			t.Fatalf("полоса снижена, хотя мы почти ничего не слали: %.1f", d.downMbps)
+		}
+	}
+}
+
+// После вынужденного снижения полоса должна возвращаться, когда путь
+// успокоился, — иначе один плохой отрезок оставит нас внизу навсегда.
+func TestControllerRecoversOnQuietPath(t *testing.T) {
+	c := newBandwidthController()
+	now := time.Now()
+	c.downMbps, c.appliedDown = 6, 6
+	c.upMbps, c.appliedUp = 3, 3
+
+	for i := 0; i < 5; i++ {
+		c.step(now.Add(time.Duration(i)*autoEvalInterval), pathObservation{
+			downBps: mbps(0.1),
+			rttMs:   50, haveRTT: true,
+			loss: 0, probes: 36,
+		})
+	}
+	if c.downMbps <= 6 {
+		t.Fatalf("полоса не восстанавливается на спокойном пути: %.1f", c.downMbps)
 	}
 }
 
@@ -62,16 +142,16 @@ func TestControllerCutsOnBufferbloat(t *testing.T) {
 	}
 }
 
-// Трафика мало — контроллер молчит: подбирать канал по паузам нельзя.
-func TestControllerHoldsWhenIdle(t *testing.T) {
+// На простое контроллер не режет полосу: подбирать канал по паузам нельзя.
+func TestControllerDoesNotCutWhenIdle(t *testing.T) {
 	c := newBandwidthController()
 	before := c.downMbps
 
 	d := c.step(time.Now(), pathObservation{
-		downBps: mbps(0.2), rttMs: 45, haveRTT: true,
+		downBps: mbps(0.2), rttMs: 45, haveRTT: true, probes: 36,
 	})
-	if d.downMbps != before || d.apply {
-		t.Fatalf("при простое полоса не должна меняться: %.1f -> %.1f (apply=%v)", before, d.downMbps, d.apply)
+	if d.downMbps < before {
+		t.Fatalf("на простое полоса снижена: %.1f -> %.1f", before, d.downMbps)
 	}
 }
 
@@ -81,7 +161,7 @@ func TestControllerRollsBackUselessRaise(t *testing.T) {
 	c := newBandwidthController()
 	now := time.Now()
 
-	// Упёрлись — поднимаем.
+	// Упёрлись — поднимаем. Замеров RTT/потерь нет: маскировка выключена.
 	c.step(now, pathObservation{downBps: mbps(14)})
 	raised := c.downMbps
 	if raised <= autoStartDownMbps {

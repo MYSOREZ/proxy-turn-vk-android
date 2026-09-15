@@ -80,10 +80,12 @@ type Config struct {
 type Shaper struct {
 	// Последний самостоятельный замер пути (см. PathStats): его читает не
 	// только обучение, но и внешний контроллер полосы.
-	pathMu    sync.Mutex
-	pathRTTMs float64
-	pathLoss  float64
-	pathAt    time.Time
+	pathMu      sync.Mutex
+	pathRTTMs   float64
+	pathHaveRTT bool
+	pathSent    int
+	pathPonged  int
+	pathAt      time.Time
 
 	aead cipher.AEAD
 

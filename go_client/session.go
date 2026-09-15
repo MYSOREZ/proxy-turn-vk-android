@@ -356,8 +356,8 @@ func RunSession(
 					case <-sessCtx.Done():
 						return
 					case <-ticker.C:
-						if rttMs, loss, _, ok := shaper.PathStats(); ok {
-							globalPath.report(sessionID, rttMs, loss)
+						if rttMs, haveRTT, sent, ponged, _, ok := shaper.PathStats(); ok {
+							globalPath.report(sessionID, rttMs, haveRTT, sent, ponged)
 						}
 					}
 				}

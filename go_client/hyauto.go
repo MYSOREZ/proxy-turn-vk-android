@@ -41,14 +41,27 @@ import (
 // эстафеты (hysteria.go), чтобы открытые соединения не рвались.
 
 const (
-	autoEvalInterval  = 10 * time.Second
-	autoMinMbps       = 2.0
-	autoMaxMbps       = 300.0
-	autoLossThreshold = 0.03 // 3% потерь по пробам — уже перебор
-	autoRTTInflation  = 1.6  // во столько раз RTT может превысить минимум
-	autoRTTSlackMs    = 40.0 // плюс запас на дрожание
-	utilizationRaise  = 0.80 // выбираем больше 80% установки — просим ещё
+	autoEvalInterval = 10 * time.Second
+	autoMinMbps      = 2.0
+	autoMaxMbps      = 300.0
+	// Порог потерь намеренно высокий. Пробы адаптивной маскировки — мелкие
+	// пакеты, релей режет их охотнее полезных, а ответ, пришедший на
+	// границе окна, засчитывается как потеря. Ставить сюда «канонические»
+	// 2-3% значит резать полосу по шуму измерения: в логе так и вышло —
+	// 12.5% потерь по пробам при живом туннеле и 50 МБ переданных данных.
+	autoLossThreshold = 0.20
+	// И только если проб в окне достаточно, чтобы доля вообще что-то
+	// значила: одна сессия даёт четыре пробы (шаг 25%), девять — около 36.
+	autoMinProbes    = 12
+	autoRTTInflation = 1.8  // во столько раз RTT может превысить минимум
+	autoRTTSlackMs   = 60.0 // плюс запас на дрожание мобильной сети
+	utilizationRaise = 0.80 // выбираем больше 80% установки — просим ещё
+	// Ниже этой утилизации сигналы перегрузки не наши: если мы почти не
+	// шлём, а потери есть — это состояние канала, и резать наш потолок
+	// бессмысленно (а при переподключении воркеров ещё и вредно).
+	utilizationFloor  = 0.25
 	raiseFactor       = 1.25
+	recoveryFactor    = 1.10 // медленный возврат вверх на здоровом пути
 	cutFactor         = 0.70
 	minChangeRatio    = 0.25 // менять сессию только при изменении ≥25%
 	minChangeInterval = 45 * time.Second
@@ -71,6 +84,10 @@ type bandwidthController struct {
 
 	rttMinMs     float64
 	lastChangeAt time.Time
+	// lossEWMA сглаживает долю потерь по окнам: одно окно — это единицы
+	// проб, по нему решать нельзя.
+	lossEWMA     float64
+	haveLossEWMA bool
 	// Скорость на момент последнего повышения — чтобы понять, дало ли оно
 	// прибавку, когда судить по RTT/потерям нечем.
 	lastRaiseDownBps float64
@@ -92,8 +109,9 @@ type pathObservation struct {
 	upBps          float64 // фактическая скорость наружу, бит/с
 	downBps        float64 // фактическая скорость внутрь, бит/с
 	rttMs          float64
+	haveRTT        bool // RTT реально измерялся, а не подставлен «худший случай»
 	loss           float64
-	haveRTT        bool // есть ли замеры RTT/потерь (адаптивная маскировка включена)
+	probes         int // сколько проб в окне: по нулю судить о потерях нельзя
 	networkChanged bool
 }
 
@@ -122,13 +140,31 @@ func (c *bandwidthController) step(now time.Time, obs pathObservation) decision 
 		c.rttMinMs = obs.rttMs
 	}
 
+	if obs.probes >= autoMinProbes {
+		if c.haveLossEWMA {
+			c.lossEWMA = 0.6*c.lossEWMA + 0.4*obs.loss
+		} else {
+			c.lossEWMA = obs.loss
+			c.haveLossEWMA = true
+		}
+	}
+
+	upUtil := obs.upBps / (c.upMbps * 1e6)
+	downUtil := obs.downBps / (c.downMbps * 1e6)
+	util := math.Max(upUtil, downUtil)
+
+	// Пока мы толком не шлём, сигналы перегрузки относятся не к нам:
+	// потери и раздутый RTT в этот момент говорят о состоянии канала или о
+	// переподключении воркеров, а урезание нашего потолка ничего не лечит.
+	driving := util >= utilizationFloor
+
 	congested := false
 	reason := ""
 	switch {
-	case obs.haveRTT && obs.loss > autoLossThreshold:
+	case driving && c.haveLossEWMA && c.lossEWMA > autoLossThreshold:
 		congested = true
-		reason = fmt.Sprintf("потери %.1f%%", obs.loss*100)
-	case obs.haveRTT && !math.IsInf(c.rttMinMs, 1) &&
+		reason = fmt.Sprintf("потери %.0f%%", c.lossEWMA*100)
+	case driving && obs.haveRTT && !math.IsInf(c.rttMinMs, 1) &&
 		obs.rttMs > c.rttMinMs*autoRTTInflation+autoRTTSlackMs:
 		congested = true
 		reason = fmt.Sprintf("RTT %.0f мс против %.0f мс в лучшем случае", obs.rttMs, c.rttMinMs)
@@ -145,8 +181,6 @@ func (c *bandwidthController) step(now time.Time, obs pathObservation) decision 
 		return c.commit(now, "снижаю: "+reason, false)
 	}
 
-	upUtil := obs.upBps / (c.upMbps * 1e6)
-	downUtil := obs.downBps / (c.downMbps * 1e6)
 	if upUtil >= utilizationRaise || downUtil >= utilizationRaise {
 		if upUtil >= utilizationRaise {
 			c.upMbps = clampMbps(c.upMbps * raiseFactor)
@@ -159,10 +193,21 @@ func (c *bandwidthController) step(now time.Time, obs pathObservation) decision 
 		return c.commit(now, "упёрлись в установленную полосу, поднимаю", false)
 	}
 
-	// Ни перегрузки, ни упора в полосу: трафика просто мало. Ничего не
-	// трогаем — иначе контроллер будет «подбирать» канал по паузам в
-	// просмотре ленты.
 	c.raisePending = false
+
+	// Ни перегрузки, ни упора в полосу: трафика просто мало. Полосу при
+	// этом медленно возвращаем вверх, если путь выглядит здоровым — иначе
+	// один неудачный отрезок оставил бы нас на заниженном потолке до конца
+	// сессии. Само по себе поднятие потолка ничего не шлёт, а применяется
+	// оно всё равно по общим правилам (заметное изменение + выдержка).
+	healthy := (!c.haveLossEWMA || c.lossEWMA < autoLossThreshold/2) &&
+		(!obs.haveRTT || math.IsInf(c.rttMinMs, 1) ||
+			obs.rttMs < c.rttMinMs*autoRTTInflation)
+	if healthy && (c.upMbps < autoMaxMbps || c.downMbps < autoMaxMbps) {
+		c.upMbps = clampMbps(c.upMbps * recoveryFactor)
+		c.downMbps = clampMbps(c.downMbps * recoveryFactor)
+		return c.commit(now, "путь спокойный, возвращаю полосу", false)
+	}
 	return decision{upMbps: c.upMbps, downMbps: c.downMbps}
 }
 
@@ -289,10 +334,10 @@ func superviseSession(
 			continue
 		}
 
-		rttMs, loss, haveRTT := globalPath.snapshot()
+		snap := globalPath.snapshot()
 		now := time.Now()
 		networkChanged := false
-		if haveRTT {
+		if snap.sessions > 0 {
 			if havePathEver && !lastPathAt.IsZero() && now.Sub(lastPathAt) > pathGapAsNetworkChange {
 				// Замеры пропадали надолго и вернулись — почти наверняка
 				// переподключение в другой сети.
@@ -305,9 +350,10 @@ func superviseSession(
 		d := ctrl.step(now, pathObservation{
 			upBps:          upBps,
 			downBps:        downBps,
-			rttMs:          rttMs,
-			loss:           loss,
-			haveRTT:        haveRTT,
+			rttMs:          snap.rttMs,
+			haveRTT:        snap.haveRTT,
+			loss:           snap.loss,
+			probes:         snap.probes,
 			networkChanged: networkChanged,
 		})
 		if !d.apply {
@@ -321,11 +367,24 @@ func superviseSession(
 	}
 }
 
-// logHySpeed печатает текущую скорость. Молчит на простое, чтобы не забивать
-// лог строками про нулевой трафик.
+// logHySpeed печатает текущую скорость и пик за сессию.
+//
+// Пик нужен потому, что в приложении эта строка обновляется на месте: без
+// него видно только последний замер, и после паузы в трафике лог показывает
+// «0.1 Мбит/с», как будто больше и не было. Молчим на простое, чтобы не
+// забивать лог нулями.
+var hyPeakUpBps, hyPeakDownBps float64
+
 func logHySpeed(upBps, downBps float64) {
+	if upBps > hyPeakUpBps {
+		hyPeakUpBps = upBps
+	}
+	if downBps > hyPeakDownBps {
+		hyPeakDownBps = downBps
+	}
 	if upBps < 50_000 && downBps < 50_000 {
 		return
 	}
-	log.Printf("[HY2] Скорость: ↓%.1f / ↑%.1f Мбит/с", downBps/1e6, upBps/1e6)
+	log.Printf("[HY2] Скорость: ↓%.1f / ↑%.1f Мбит/с (пик ↓%.1f / ↑%.1f)",
+		downBps/1e6, upBps/1e6, hyPeakDownBps/1e6, hyPeakUpBps/1e6)
 }

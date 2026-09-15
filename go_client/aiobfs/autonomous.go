@@ -130,11 +130,18 @@ func (s *Shaper) drainAutoStats() (rttMs, lossRate float64) {
 			lossRate = 0
 		}
 	}
-	if s.autoHaveRTT {
+	haveRTT := s.autoHaveRTT
+	if haveRTT {
 		rttMs = s.autoRTTEWMA
 	} else {
 		rttMs = 300 // no samples this window at all: assume the worst rather than the best
 	}
+
+	// Внешним потребителям (контроллер полосы) отдаём сырые счётчики и
+	// признак «RTT вообще мерился». Готовая доля потерь по одному окну
+	// слишком грубая: проб в окне всего четыре, то есть шаг 25%, и по ней
+	// нельзя судить о канале. Сумма счётчиков по всем сессиям — можно.
+	s.storePathStats(rttMs, haveRTT, sent, ponged)
 	return rttMs, lossRate
 }
 
@@ -154,24 +161,32 @@ func (s *Shaper) drainAutoStats() (rttMs, lossRate float64) {
 // не только сам обучающийся выбор профиля, но и вызывающая сторона — см.
 // PathStats. Замеры уже есть (SendProbe/PendingPong меряют RTT и долю
 // пропавших проб), до этого они никуда наружу не отдавались.
-func (s *Shaper) storePathStats(rttMs, lossRate float64) {
+func (s *Shaper) storePathStats(rttMs float64, haveRTT bool, sent, ponged int) {
 	s.pathMu.Lock()
 	s.pathRTTMs = rttMs
-	s.pathLoss = lossRate
+	s.pathHaveRTT = haveRTT
+	s.pathSent = sent
+	s.pathPonged = ponged
 	s.pathAt = time.Now()
 	s.pathMu.Unlock()
 }
 
-// PathStats отдаёт последний самостоятельный замер пути: RTT в миллисекундах,
-// долю потерь в [0,1] и возраст замера. ok=false, пока не было ни одного
-// окна измерений (RunAutonomous не запущен или ещё не тикнул).
-func (s *Shaper) PathStats() (rttMs, lossRate float64, age time.Duration, ok bool) {
+// PathStats отдаёт последний самостоятельный замер пути за окно:
+// RTT в миллисекундах и признак того, что RTT вообще измерялся (иначе
+// значение — заглушка «худший случай», и судить по нему о канале нельзя),
+// а также сырые счётчики проб: сколько отправлено и сколько вернулось.
+// ok=false, пока не было ни одного окна измерений.
+//
+// Счётчики отдаются сырыми намеренно: в окне всего четыре пробы, то есть
+// доля потерь по одной сессии квантуется шагом 25% и как сигнал перегрузки
+// бесполезна. Суммировать их имеет смысл уже по всем сессиям сразу.
+func (s *Shaper) PathStats() (rttMs float64, haveRTT bool, sent, ponged int, age time.Duration, ok bool) {
 	s.pathMu.Lock()
 	defer s.pathMu.Unlock()
 	if s.pathAt.IsZero() {
-		return 0, 0, 0, false
+		return 0, false, 0, 0, 0, false
 	}
-	return s.pathRTTMs, s.pathLoss, time.Since(s.pathAt), true
+	return s.pathRTTMs, s.pathHaveRTT, s.pathSent, s.pathPonged, time.Since(s.pathAt), true
 }
 
 func (s *Shaper) RunAutonomous(ctx context.Context, send func(wire []byte) error, interval time.Duration) (stop func()) {
@@ -199,7 +214,6 @@ func (s *Shaper) RunAutonomous(ctx context.Context, send func(wire []byte) error
 				}
 			case <-evalTicker.C:
 				rttMs, lossRate := s.drainAutoStats()
-				s.storePathStats(rttMs, lossRate)
 				s.Observe(rttMs, lossRate, 0)
 			}
 		}
