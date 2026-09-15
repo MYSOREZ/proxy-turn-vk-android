@@ -155,23 +155,42 @@ func TestControllerDoesNotCutWhenIdle(t *testing.T) {
 	}
 }
 
-// Без замеров RTT (маскировка выключена) рост подтверждается прибавкой
-// скорости: поднятая планка, не давшая прироста, откатывается.
-func TestControllerRollsBackUselessRaise(t *testing.T) {
+// Повышение, после которого скорость УПАЛА, откатывается ровно к прежнему
+// значению: без замеров RTT это единственный доступный признак перебора.
+func TestControllerRevertsHarmfulRaise(t *testing.T) {
 	c := newBandwidthController()
 	now := time.Now()
 
 	// Упёрлись — поднимаем. Замеров RTT/потерь нет: маскировка выключена.
 	c.step(now, pathObservation{downBps: mbps(14)})
 	raised := c.downMbps
+	before := c.preRaiseDownMbps
 	if raised <= autoStartDownMbps {
 		t.Fatalf("ожидался рост: %.1f", raised)
 	}
 
-	// Скорость осталась прежней — откат.
+	// Скорость упала — возвращаемся к прежней полосе.
+	d := c.step(now.Add(autoEvalInterval), pathObservation{downBps: mbps(7)})
+	if d.downMbps != before {
+		t.Fatalf("откат не к прежнему значению: ожидалось %.1f, получено %.1f", before, d.downMbps)
+	}
+}
+
+// Повышение, после которого скорость просто не изменилась, резать полосу не
+// должно: значит упёрлись не в нашу планку, а канал эту скорость держит.
+//
+// Именно на этом сценарии прежнее правило уводило полосу вниз по кругу,
+// вплоть до пола: «не дало прибавки» трактовалось как перегрузка.
+func TestControllerDoesNotCutWhenRaiseChangesNothing(t *testing.T) {
+	c := newBandwidthController()
+	now := time.Now()
+
+	c.step(now, pathObservation{downBps: mbps(14)})
+	raised := c.downMbps
+
 	d := c.step(now.Add(autoEvalInterval), pathObservation{downBps: mbps(14)})
-	if d.downMbps >= raised {
-		t.Fatalf("бесполезное повышение не откатилось: %.1f -> %.1f", raised, d.downMbps)
+	if d.downMbps < raised {
+		t.Fatalf("полоса срезана там, где канал стабильно держит скорость: %.1f -> %.1f", raised, d.downMbps)
 	}
 }
 
@@ -232,5 +251,52 @@ func TestControllerClampsBounds(t *testing.T) {
 	}
 	if c.downMbps < autoMinMbps || c.upMbps < autoMinMbps {
 		t.Fatalf("провалились под пол: ↑%.1f ↓%.1f", c.upMbps, c.downMbps)
+	}
+}
+
+// Потолок роста привязан к реально достигнутой скорости.
+//
+// В бою «возвращаю полосу» разогнало установку до ↓111 Мбит/с при фактических
+// ↓12: каждое такое изменение стоит пересоздания сессии, а сама полоса
+// перестаёт что-либо ограничивать.
+func TestControllerCeilingFollowsObservedSpeed(t *testing.T) {
+	c := newBandwidthController()
+	now := time.Now()
+
+	// Канал даёт около 12 Мбит/с, путь спокойный, трафик идёт.
+	for i := 0; i < 60; i++ {
+		c.step(now.Add(time.Duration(i)*autoEvalInterval), pathObservation{
+			downBps: mbps(12), upBps: mbps(0.4),
+			rttMs: 50, haveRTT: true, loss: 0, probes: 36,
+		})
+	}
+
+	if c.downMbps > 12*headroomFactor+1 {
+		t.Fatalf("установка ушла в отрыв от реальной скорости: ↓%.1f при 12 Мбит/с", c.downMbps)
+	}
+	if c.downMbps < 12 {
+		t.Fatalf("установка ниже фактической скорости, канал будет зажат: ↓%.1f", c.downMbps)
+	}
+}
+
+// Когда канал становится быстрее, потолок поднимается следом.
+func TestControllerCeilingGrowsWithSpeed(t *testing.T) {
+	c := newBandwidthController()
+	now := time.Now()
+
+	for i := 0; i < 30; i++ {
+		c.step(now.Add(time.Duration(i)*autoEvalInterval), pathObservation{
+			downBps: mbps(10), rttMs: 50, haveRTT: true, probes: 36,
+		})
+	}
+	slow := c.downMbps
+
+	for i := 30; i < 90; i++ {
+		c.step(now.Add(time.Duration(i)*autoEvalInterval), pathObservation{
+			downBps: mbps(80), rttMs: 50, haveRTT: true, probes: 36,
+		})
+	}
+	if c.downMbps <= slow {
+		t.Fatalf("потолок не вырос вслед за скоростью: %.1f -> %.1f", slow, c.downMbps)
 	}
 }
